@@ -129,6 +129,9 @@ struct pjsip_logger_session {
 /*! \brief The default logger session */
 static struct pjsip_logger_session *default_logger;
 
+/*! \brief Whether or not the logger was enabled via the debug option in pjsip.conf (as opposed to via CLI) */
+static int logger_enabled_via_config = 0;
+
 /*! \brief Destructor for logger session */
 static void pjsip_logger_session_destroy(void *obj)
 {
@@ -665,15 +668,27 @@ static void check_debug(void)
 	RAII_VAR(char *, debug, ast_sip_get_debug(), ast_free);
 
 	if (ast_false(debug)) {
-		pjsip_disable_logger(-1);
+		/* If the logger was enabled via the CLI instead of
+		 * through the config file, then we shouldn't
+		 * disable it on a reload.
+		 * Only disable logging if the logger was previously
+		 * enabled via the config file. */
+		if (logger_enabled_via_config) {
+			pjsip_disable_logger(-1);
+		}
+		logger_enabled_via_config = 0;
 		return;
 	}
 
 	if (ast_true(debug)) {
+		if (logger_enabled_via_config) {
+			return;
+		}
 		pjsip_enable_logger_all(-1);
 		return;
 	}
 
+	logger_enabled_via_config = 1;
 	if (pjsip_enable_logger_host(-1, debug, 0) != CLI_SUCCESS) {
 		ast_log(LOG_WARNING, "Could not resolve host %s for debug "
 			"logging\n", debug);
