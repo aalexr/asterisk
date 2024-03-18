@@ -828,13 +828,12 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 	} else if (transport->type == AST_TRANSPORT_TCP) {
 		pjsip_tcp_transport_cfg cfg;
 		static int option = 1;
+		int sockopt_count = 0;
 
 		pjsip_tcp_transport_cfg_default(&cfg, temp_state->state->host.addr.sa_family);
 		cfg.bind_addr = temp_state->state->host;
 		cfg.async_cnt = transport->async_operations;
 		set_qos(transport, &cfg.qos_params);
-
-		int sockopt_count = 0;
 
 		/* sockopt_params.options is copied to each newly connected socket */
 		cfg.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
@@ -847,12 +846,10 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 			ast_log(LOG_DEBUG, "TCP Keepalive enabled for transport '%s'. Idle Time: %d, Interval: %d, Count: %d\n",
 					ast_sorcery_object_get_id(obj), transport->tcp_keepidle_time, transport->tcp_keepintvl_time, transport->tcp_keepcnt);
 
-			static int enable = 1;
-
 			cfg.sockopt_params.options[sockopt_count].level = pj_SOL_SOCKET();
 			cfg.sockopt_params.options[sockopt_count].optname = SO_KEEPALIVE;
-			cfg.sockopt_params.options[sockopt_count].optval = &enable;
-			cfg.sockopt_params.options[sockopt_count].optlen = sizeof(enable);
+			cfg.sockopt_params.options[sockopt_count].optval = &option;
+			cfg.sockopt_params.options[sockopt_count].optlen = sizeof(option);
 			sockopt_count++;
 
 			cfg.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
@@ -911,12 +908,10 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 			ast_log(LOG_DEBUG, "TCP Keepalive enabled for transport '%s'. Idle Time: %d, Interval: %d, Count: %d\n",
 				ast_sorcery_object_get_id(obj), transport->tcp_keepidle_time, transport->tcp_keepintvl_time, transport->tcp_keepcnt);
 
-			static int enable = 1;
-
 			temp_state->state->tls.sockopt_params.options[sockopt_count].level = pj_SOL_SOCKET();
 			temp_state->state->tls.sockopt_params.options[sockopt_count].optname = SO_KEEPALIVE;
-			temp_state->state->tls.sockopt_params.options[sockopt_count].optval = &enable;
-			temp_state->state->tls.sockopt_params.options[sockopt_count].optlen = sizeof(enable);
+			temp_state->state->tls.sockopt_params.options[sockopt_count].optval = &option;
+			temp_state->state->tls.sockopt_params.options[sockopt_count].optlen = sizeof(option);
 			sockopt_count++;
 
 			temp_state->state->tls.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
