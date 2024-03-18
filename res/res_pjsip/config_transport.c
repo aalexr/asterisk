@@ -844,7 +844,7 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 
 		if (transport->tcp_keepalive_enable) {
 			ast_log(LOG_DEBUG, "TCP Keepalive enabled for transport '%s'. Idle Time: %d, Interval: %d, Count: %d\n",
-					ast_sorcery_object_get_id(obj), transport->tcp_keepidle_time, transport->tcp_keepintvl_time, transport->tcp_keepcnt);
+				ast_sorcery_object_get_id(obj), transport->tcp_keepidle_time, transport->tcp_keepintvl_time, transport->tcp_keepcnt);
 
 			cfg.sockopt_params.options[sockopt_count].level = pj_SOL_SOCKET();
 			cfg.sockopt_params.options[sockopt_count].optname = SO_KEEPALIVE;
@@ -898,10 +898,10 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 		set_qos(transport, &temp_state->state->tls.qos_params);
 
 		/* sockopt_params.options is copied to each newly connected socket */
-		temp_state->state->tls.sockopt_params.options[0].level = pj_SOL_TCP();
-		temp_state->state->tls.sockopt_params.options[0].optname = pj_TCP_NODELAY();
-		temp_state->state->tls.sockopt_params.options[0].optval = &option;
-		temp_state->state->tls.sockopt_params.options[0].optlen = sizeof(option);
+		temp_state->state->tls.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
+		temp_state->state->tls.sockopt_params.options[sockopt_count].optname = pj_TCP_NODELAY();
+		temp_state->state->tls.sockopt_params.options[sockopt_count].optval = &option;
+		temp_state->state->tls.sockopt_params.options[sockopt_count].optlen = sizeof(option);
 		sockopt_count++;
 
 		if (transport->tcp_keepalive_enable) {
