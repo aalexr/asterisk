@@ -866,13 +866,14 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 			sockopt_count++;
 
 			cfg.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
-			cfg.sockopt_params.options[sockopt_count].optname = tcp_keepalive_probe_count;
+			cfg.sockopt_params.options[sockopt_count].optname = TCP_KEEPCNT;
 			cfg.sockopt_params.options[sockopt_count].optval = &transport->tcp_keepalive_probe_count;
 			cfg.sockopt_params.options[sockopt_count].optlen = sizeof(transport->tcp_keepalive_probe_count);
 			sockopt_count++;
 		}
 #else
-	ast_log(LOG_WARNING, "TCP keepalive settings are disabled because PJ_MAX_SOCKOPT_PARAMS is less than 5.\n");
+	ast_log(LOG_WARNING, "TCP keepalive settings for '%s' not set due to PJSIP built without support for setting all options. Consider using bundled PJSIP.\n",
+		ast_sorcery_object_get_id(obj));
 #endif
 
 		cfg.sockopt_params.cnt = sockopt_count;
@@ -932,13 +933,14 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 			sockopt_count++;
 
 			temp_state->state->tls.sockopt_params.options[sockopt_count].level = pj_SOL_TCP();
-			temp_state->state->tls.sockopt_params.options[sockopt_count].optname = tcp_keepalive_probe_count;
+			temp_state->state->tls.sockopt_params.options[sockopt_count].optname = TCP_KEEPCNT;
 			temp_state->state->tls.sockopt_params.options[sockopt_count].optval = &transport->tcp_keepalive_probe_count;
 			temp_state->state->tls.sockopt_params.options[sockopt_count].optlen = sizeof(transport->tcp_keepalive_probe_count);
 			sockopt_count++;
 		}
 #else
-	ast_log(LOG_WARNING, "TCP keepalive settings are disabled because PJ_MAX_SOCKOPT_PARAMS is less than 5.\n");
+	ast_log(LOG_WARNING, "TCP keepalive settings for '%s' not set due to PJSIP built without support for setting all options. Consider using bundled PJSIP.\n",
+		ast_sorcery_object_get_id(obj));
 #endif
 
 		temp_state->state->tls.sockopt_params.cnt = sockopt_count;
