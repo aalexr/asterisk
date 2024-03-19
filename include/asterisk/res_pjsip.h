@@ -302,11 +302,11 @@ struct ast_sip_transport {
 	/*! Enable TCP keepalive */
 	int tcp_keepalive_enable;
 	/*! Time in seconds the connection needs to remain idle before TCP starts sending keepalive probes */
-	int tcp_keepidle_time;
+	int tcp_keepalive_idle_time;
 	/*! The time in seconds between individual keepalive probes */
-	int tcp_keepintvl_time;
+	int tcp_keepalive_interval_time;
 	/*! The maximum number of keepalive probes TCP should send before dropping the connection */
-	int tcp_keepcnt;
+	int tcp_keepalive_probe_count;
 };
 
 #define SIP_SORCERY_DOMAIN_ALIAS_TYPE "domain_alias"

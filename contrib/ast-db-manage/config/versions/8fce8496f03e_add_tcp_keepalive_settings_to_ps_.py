@@ -15,12 +15,12 @@ import sqlalchemy as sa
 
 def upgrade():
     op.add_column('ps_transports', sa.Column('tcp_keepalive_enable', sa.Boolean(), nullable=True))
-    op.add_column('ps_transports', sa.Column('tcp_keepidle_time', sa.Integer(), nullable=True))
-    op.add_column('ps_transports', sa.Column('tcp_keepintvl_time', sa.Integer(), nullable=True))
-    op.add_column('ps_transports', sa.Column('tcp_keepcnt', sa.Integer(), nullable=True))
+    op.add_column('ps_transports', sa.Column('tcp_keepalive_idle_time', sa.Integer(), nullable=True))
+    op.add_column('ps_transports', sa.Column('tcp_keepalive_interval_time', sa.Integer(), nullable=True))
+    op.add_column('ps_transports', sa.Column('tcp_keepalive_probe_count', sa.Integer(), nullable=True))
 
 def downgrade():
     op.drop_column('ps_transports', 'tcp_keepalive_enable')
-    op.drop_column('ps_transports', 'tcp_keepidle_time')
-    op.drop_column('ps_transports', 'tcp_keepintvl_time')
-    op.drop_column('ps_transports', 'tcp_keepcnt')
+    op.drop_column('ps_transports', 'tcp_keepalive_idle_time')
+    op.drop_column('ps_transports', 'tcp_keepalive_interval_time')
+    op.drop_column('ps_transports', 'tcp_keepalive_probe_count')
