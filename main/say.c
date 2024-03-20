@@ -56,6 +56,7 @@
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/test.h"
+#include "asterisk/cli.h" /* use ESS */
 
 /* Forward declaration */
 static int wait_file(struct ast_channel *chan, const char *ints, const char *file, const char *lang);
@@ -353,26 +354,45 @@ static int say_digit_str_full(struct ast_channel *chan, const char *str, const c
 static struct ast_str* ast_get_money_en_dollars_str(const char *str, const char *lang)
 {
 	const char *fnr;
-
-	double dollars = 0;
-	int amt, cents;
+	const char *period;
+	int amt, dollars, cents = 0;
 	struct ast_str *fnrecurse = NULL;
+	struct ast_str *filenames;
 
-	struct ast_str *filenames = ast_str_create(20);
+	if (ast_strlen_zero(str)) {
+		return NULL;
+	}
+
+	filenames = ast_str_create(20);
 	if (!filenames) {
 		return NULL;
 	}
 	ast_str_reset(filenames);
 
-	if (sscanf(str, "%30lf", &dollars) != 1) {
-		amt = 0;
-	} else { /* convert everything to cents */
-		amt = dollars * 100;
+	/* Don't use sscanf because floating point rounding
+	 * could distort the cents units. Just parse as string. */
+	dollars = atoi(str); /* atoi will stop at the period, if there is one */
+	period = strchr(str, '.');
+	if (period) {
+		/* Cents are after the decimal point, if present */
+		period++;
+		if (!ast_strlen_zero(period)) {
+			size_t centlen = strlen(period);
+			if (centlen == 1) {
+				cents = 10 * atoi(period);
+			} else if (centlen == 2) {
+				cents = atoi(period);
+			} else {
+				/* Only care about first two characters */
+				char centbuf[3];
+				ast_copy_string(centbuf, period, sizeof(centbuf));
+				cents = atoi(period);
+			}
+		}
 	}
+	amt = dollars * 100 + cents; /* convert everything to cents */
 
-	/* Just the cents after the dollar decimal point */
-	cents = amt - (((int) dollars) * 100);
-	ast_debug(1, "Cents is %d, amount is %d\n", cents, amt);
+	ast_debug(1, "Amount is %d (%d dollar%s, %d cent%s)\n", amt, dollars, ESS(dollars), cents, ESS(cents));
 
 	if (amt >= 100) {
 		fnrecurse = ast_get_number_str((amt / 100), lang);
