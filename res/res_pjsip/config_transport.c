@@ -1769,6 +1769,8 @@ int ast_sip_initialize_sorcery_transport(void)
 	ast_sorcery_object_field_register(sorcery, "transport", "websocket_write_timeout", AST_DEFAULT_WEBSOCKET_WRITE_TIMEOUT_STR, OPT_INT_T, PARSE_IN_RANGE, FLDSET(struct ast_sip_transport, write_timeout), 1, INT_MAX);
 	ast_sorcery_object_field_register(sorcery, "transport", "allow_reload", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_transport, allow_reload));
 	ast_sorcery_object_field_register(sorcery, "transport", "symmetric_transport", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_transport, symmetric_transport));
+	ast_sorcery_object_field_register(sorcery, "transport", "ims_port_c", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_transport, ims_port_c));
+	ast_sorcery_object_field_register(sorcery, "transport", "ims_port_s", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_transport, ims_port_s));
 
 	ast_sip_register_endpoint_formatter(&endpoint_transport_formatter);
 
