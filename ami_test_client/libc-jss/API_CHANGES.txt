@@ -1,0 +1,30 @@
+2013-09-17 - netsocket
+==========
+
+A netsocket mostantól nem fogad el kívülről értékeket, tehát nem szabad
+közvetlenül a programból manipulálni a netsocket_t objektumot. A host, lhost,
+port, lport értékeket az alábbi függvények segítségével lehet beállítani. Ennek
+oka az, hogy eddig a netsocket_t mutatókban tárolta a host és lhost stringeket,
+ami azt okozta, hogy ha a főprogramban megváltoztattuk a hostot, akkor a
+netsocket-ben is megváltozott, hisz ugyan arra mutattak. Mostantól a
+netsocket_t saját char[] tömbben tárolja ezeket az értékeket, így nem lesz
+hatással semmilyen külső változtatás, illetve nem fog összekeveredni.
+
+Eddig így kellett hívni:
+
+netsocket->host = host;
+netsocket->port = port;
+netsocket->lhost = lhost;
+netsocket->lport = lport;
+
+Mostantól pedig így kell:
+
+netsocket_host(netsocket, host);
+netsocket_port(netsocket, port);
+netsocket_lhost(netsocket, lhost);
+netsocket_lport(netsocket, lport);
+
+
+
+
+
