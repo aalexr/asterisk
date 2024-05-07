@@ -587,6 +587,7 @@ AST_EXT_LIB_SETUP([BEANSTALK], [Beanstalk Job Queue], [beanstalk])
 #FIXME
 AST_EXT_LIB_SETUP([VEVS], [Vocal EVS Audio Decoder/Encoder], [bluetooth])
 #AST_EXT_LIB_SETUP([VEVS], [Vocal EVS Audio Decoder/Encoder], [vocal-evs])
+AST_EXT_LIB_SETUP([LIBMNL], [MNL library], [mnl])
 
 if test "x${PBX_PJPROJECT}" != "x1" ; then
 AST_EXT_LIB_SETUP([PJPROJECT], [PJPROJECT], [pjproject])
@@ -2425,6 +2426,7 @@ AST_EXT_LIB_CHECK([BEANSTALK], [beanstalk], [bs_version], [beanstalk.h])
 
 #FIXME
 AST_EXT_LIB_CHECK([VEVS], [bluetooth], [ba2str], [bluetooth/bluetooth.h])
+AST_EXT_LIB_CHECK([LIBMNL], [mnl], [mnl_socket_open], [libmnl/libmnl.h])
 #AST_EXT_LIB_CHECK([VEVS], [vocal-evs], [vevs_enc], [vocal-evs/evs.h])
 
 PG_CONFIG=":"
