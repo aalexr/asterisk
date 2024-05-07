@@ -1,0 +1,30 @@
+libzdb - http://www.tildeslash.com/libzdb/
+A small, easy to use Open Source Database Connection Pool Library with the 
+following features:
+-Thread safe Database Connection Pool
+-Connect to multiple database systems
+-Zero runtime configuration, connect using a URL scheme
+-Supports MySQL, PostgreSQL, SQLite and Oracle
+
+MySQL C Library API Reference:
+http://dev.mysql.com/doc/refman/5.1/en/c-api-functions.html
+
+MySQL C API Tutorial:
+http://zetcode.com/tutorials/mysqlcapitutorial/
+
+MySQL szerverben trigger - adding a New User-Defined Function
+http://dev.mysql.com/doc/refman/5.5/en/adding-udf.html
+
+
+
+http://jan.kneschke.de/2008/9/9/async-mysql-queries-with-c-api/
+
+tömör leírás az async elvről:
+http://betterlogic.com/roger/2008/08/gdb-says-asynchronous-mysql-c-api/
+
+http://stackoverflow.com/questions/11313686/using-libmysqlclient-in-multi-threaded-application
+
+http://www.linuxtopia.org/online_books/database_guides/mysql_5.1_database_reference_guide/threaded-clients.html
+
+http://dev.mysql.com/doc/refman/5.1/en/threaded-clients.html
+
