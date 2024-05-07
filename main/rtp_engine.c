@@ -3724,6 +3724,7 @@ int ast_rtp_engine_init(void)
 	set_next_mime_type(ast_format_opus, 0,  "audio", "opus", 48000);
 	set_next_mime_type(ast_format_vp8, 0,  "video", "VP8", 90000);
 	set_next_mime_type(ast_format_vp9, 0, "video", "VP9", 90000);
+	set_next_mime_type(ast_format_vevs, 0, "audio", "EVS", 16000);
 
 	/* Define the static rtp payload mappings */
 	add_static_payload(0, ast_format_ulaw, 0);
