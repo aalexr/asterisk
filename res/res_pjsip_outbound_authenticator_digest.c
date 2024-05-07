@@ -33,7 +33,9 @@
 #include "asterisk/vector.h"
 
 pj_str_t supported_digest_algorithms[] = {
-	{ "MD5", 3}
+	{ "MD5", 3},
+	{ "AKAv1-MD5", 9},
+	{ "AKAv2-MD5", 9}
 };
 
 /*!
