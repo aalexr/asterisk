@@ -1,0 +1,15 @@
+Ring Bufferrel megoldhato a mem logging?
+http://en.wikipedia.org/wiki/Circular_buffer
+
+
+LIBEV STRICT ALIASING
+=====================
+
+netsocket.c -ben a libev örjöng:
+
+* libjsi/netsocket.c: In function ‘netsocket_connect’:
+* libjsi/netsocket.c:264: warning: dereferencing type-punned pointer will break strict-aliasing rules
+
+A megoldás egyelőre az, hogy -fno-strict-aliasing CFLAGS-et használjuk.
+
+

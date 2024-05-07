@@ -1,0 +1,69 @@
+BUGOK:
+- Asterisk 1.4 esetén az originate.c rossz Hangup-cause kódot ad vissza, ha Zap
+  csatornán indítjuk a hívást. Rendre 19-et ad vissza. Nem az originate.c
+  hibája, mert az AMI dumpban is 19 látszódik. Local csatornán rendben működik.
+
+TODO:
+-első körben tesztelni kéne az ami.c-t a test_ami.c -vel. Írni valami kis célprogramot! pl. mellék állapot listázás
+-ami.c-ben ami_event_list_t átnevezése valami kultúráltabb típusnévre, mert ez az API-ban megjelenik
+-időzítőt betenni, hogy ha megszakad a kapcsolat az Asteriskkel, akkor ping timeout legyen
+-időzítőt betenni, ami törlődik a sikeres authentikációnál
+-Asterisk Call Manager/1.1 fejléc megérkezése előtt senki nem írhat az AMI socketre, mert ez lesz:
+  Asterisk Call Manager/1.1
+  Response: Error
+  ActionID: 1
+  Message: Missing action in request
+-CLI response és az olyan több csomagos válaszok, mint pl. a DongleShowDevices kezelése
+-ami_action-t ne lehessen regisztrálni, amíg nincs connected állapot
+ (vigyázni a beépített authentication ami_action-re!)
+-ami_connect legyen hatástlan, ha már épp kapcsolódik vagy kapcsolódva van
+-ami_event_unregister megírása
+-ami dump events: response kulonvalasztasa
+-event es response kulonvalasztasa keresesnel
+-megvizsgálni, hogy az originate.c egyszerűbben működhet -e a linkedid változóval?
+-Asterisk 1.4-et dobni, mert nem kell!
+
+CLI formátum:
+action: command
+command: sip show domains
+
+Response: Follows
+Privilege: Command
+SIP Domain support not enabled.
+
+--END COMMAND--
+
+
+SMS küldése
+	action: DongleSendPDU
+	ActionID: 59
+	Device: dongle0
+	PDU: 0031000B816002660304F000000010C8329BFD061DA74DD0F52D679343
+
+Válasz a várakozósorból
+	Response: Success
+	ActionID: 59
+	Message: [dongle0] SMS queued for send
+	ID: 0x5e13c0
+
+Elküldve
+	Event: DongleSMSStatus
+	Privilege: call,all
+	Device: dongle0
+	ID: 0x5e13c0
+	Status: Sent
+
+Nincs elküldve
+	Event: DongleSMSStatus
+	Privilege: call,all
+	Device: dongle0
+	ID: 0x5c0888
+	Status: NotSent
+
+
+JEGYZETEK
+=========
+
+A linkedid változó, pl: ${CHANNEL(LinkedID)} hívásonként és nem csatornánként
+változik. Tehát a tovább kapcsolt, illetve Local channel által továbbvitt
+hívások ugyan azt a LinkedID-t kapják.
