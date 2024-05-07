@@ -2366,10 +2366,12 @@ static int ami_register(struct mansession *s, const struct message *m)
 	/* We need to serialize the unregister and register so they need
 	 * to be queued as separate tasks.
 	 */
-	if (queue_unregister(state)) {
-		astman_send_ack(s, m, "Failed to queue unregistration");
-	} else if (queue_register(state)) {
-		astman_send_ack(s, m, "Failed to queue unregistration");
+#warning hacking
+	if (queue_register(state)) {
+//	if (queue_unregister(state)) {
+//		astman_send_ack(s, m, "Failed to queue unregistration");
+//	} else if (queue_register(state)) {
+		astman_send_ack(s, m, "Failed to queue registration");
 	} else {
 		astman_send_ack(s, m, "Reregistration sent");
 	}
