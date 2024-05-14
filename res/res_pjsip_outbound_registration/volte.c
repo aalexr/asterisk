@@ -469,7 +469,7 @@ pj_status_t volte_init_authorization(pjsip_tx_data *tdata, const char *fromdomai
 	pj_status_t status;
 
 	snprintf(authorization, sizeof(authorization),
-		 "Digest uri=\"sip:%s\",usernmame=\"%s\",response=\"\",realm=\"%s\",nonce=\"\"",
+		 "Digest uri=\"sip:%s\",username=\"%s\",response=\"\",realm=\"%s\",nonce=\"\"",
 		 fromdomain, username, fromdomain);
 
 	const pj_str_t authorization_str = {authorization, strlen(authorization)};
