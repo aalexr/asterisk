@@ -1986,7 +1986,7 @@ static void *sip_outbound_registration_alloc(const char *name)
 }
 
 /*! \brief Helper function which populates a pj_str_t with a contact header */
-static int sip_dialog_create_contact(pj_pool_t *pool, pj_str_t *contact, const char *user,
+static int sip_dialog_create_contact(pj_pool_t *pool, unsigned int ims_aka, pj_str_t *contact, const char *user,
 	const pj_str_t *target, pjsip_tpselector *selector, const char *line, const char *header_params)
 {
 	pj_str_t tmp, local_addr;
@@ -2031,7 +2031,7 @@ static int sip_dialog_create_contact(pj_pool_t *pool, pj_str_t *contact, const c
 
 	contact->ptr = pj_pool_alloc(pool, PJSIP_MAX_URL_SIZE);
 	contact->slen = pj_ansi_snprintf(contact->ptr, PJSIP_MAX_URL_SIZE,
-		"<%s:%s@%s%.*s%s:%d%s%s%s%s>%s%s",
+		ims_aka ? "<%s:%s@%s%.*s%s:%d%s%s%s%s>%s%s%s" : "<%s:%s@%s%.*s%s:%d%s%s%s%s>%s%s",
 		((pjsip_transport_get_flag_from_type(type) & PJSIP_TRANSPORT_SECURE) && PJSIP_URI_SCHEME_IS_SIPS(uri)) ? "sips" : "sip",
 		user,
 		(type & PJSIP_TRANSPORT_IPV6) ? "[" : "",
@@ -2043,6 +2043,7 @@ static int sip_dialog_create_contact(pj_pool_t *pool, pj_str_t *contact, const c
 		(type != PJSIP_TRANSPORT_UDP && type != PJSIP_TRANSPORT_UDP6) ? pjsip_transport_get_type_name(type) : "",
 		!ast_strlen_zero(line) ? ";line=" : "",
 		S_OR(line, ""),
+		ims_aka ? ";+g.3gpp.icsi-ref=\"urn\%3Aurn-7\%3A3gpp-service.ims.icsi.mmtel\";+g.3gpp.smsip;audio" : "",
 		!ast_strlen_zero(header_params) ? ";" : "",
 		S_OR(header_params, ""));
 
@@ -2289,7 +2290,7 @@ static int sip_outbound_registration_regc_alloc(void *data)
 
 	pj_cstr(&server_uri, registration->server_uri);
 
-	if (sip_dialog_create_contact(pjsip_regc_get_pool(state->client_state->client),
+	if (sip_dialog_create_contact(pjsip_regc_get_pool(state->client_state->client), state->client_state->ims_aka,
 		&contact_uri, S_OR(registration->contact_user, "s"), &server_uri, &selector,
 		state->client_state->line, registration->contact_header_params)) {
 		ast_sip_tpselector_unref(&selector);
