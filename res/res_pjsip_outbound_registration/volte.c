@@ -235,6 +235,7 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 		ast_log(LOG_ERROR, "Given 'ealg' not supported.\n");
 		return -EINVAL;
 	}
+	memset(&auth_algo, 0, sizeof(auth_algo));
 	strcpy(auth_algo.algo.alg_name, g_ipsec_alg[i].kernel_name);
 	switch (i) {
 	case 0:
@@ -247,6 +248,7 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 		auth_algo.algo.alg_key_len = 160;
 		break;
 	}
+	memset(&ciph_algo, 0, sizeof(ciph_algo));
 	strcpy(ciph_algo.algo.alg_name, g_ipsec_ealg[j].kernel_name);
 	switch (j) {
 	case 0:
@@ -645,7 +647,9 @@ pj_status_t volte_get_security_server(struct ast_sip_transport_state *transport_
 
 	memset(sec, 0, sizeof(*sec));
 
-	pj_scan_init(&scanner, sec_hdr->hvalue.ptr, sec_hdr->hvalue.slen, 0, &on_syntax_error);
+	/* NOTE: The string to parse must be null-terminated. */
+	pj_scan_init(&scanner, transport_state->volte.security_server, strlen(transport_state->volte.security_server),
+		     0, &on_syntax_error);
 
 	for (;;) {
 		pj_str_t name, value;

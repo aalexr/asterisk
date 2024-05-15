@@ -9,7 +9,7 @@ struct mnl_socket;
 
 struct xfrm_algobuf {
 	struct xfrm_algo algo;
-	uint8_t buf[128];
+	uint8_t buf[160];
 };
 
 struct mnl_socket *xfrm_init_mnl_socket(void);
