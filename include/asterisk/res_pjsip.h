@@ -1110,6 +1110,8 @@ struct ast_sip_endpoint {
 	enum ast_sip_100rel_mode rel100;
 	/*! Send Advice-of-Charge messages */
 	unsigned int send_aoc;
+	/*! \brief VoLTE support */
+	unsigned int ims_aka;
 };
 
 /*! URI parameter for symmetric transport */
