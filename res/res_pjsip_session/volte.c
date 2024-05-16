@@ -27,6 +27,7 @@ const pj_str_t STR_SECURITY_VERIFY = { "Security-Verify", 15 };
 const pj_str_t STR_REQUIRE = { "Require", 7 };
 const pj_str_t STR_PROXY_REQUIRE = { "Proxy-Require", 13 };
 const pj_str_t STR_SEC_AGREE = { "sec-agree", 9 };
+const pj_str_t STR_P_ACCESS_NETWORK_INFO = { "P-Access-Network-Info", 21 };
 
 /* Create string header and add given value. */
 static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
@@ -105,3 +106,17 @@ pj_status_t volte_add_sec_agree(pjsip_tx_data *tdata)
 	return PJ_SUCCESS;
 }
 
+/* Add P-Access-Network-Info to header. */
+pj_status_t volte_add_p_access_network_info(pjsip_tx_data *tdata, char *info)
+{
+	pj_status_t status;
+
+	const pj_str_t info_str = { info, strlen(info) };
+
+	/* "P-Access-Network-Info" */
+	status = add_value_string_hdr(tdata, &STR_P_ACCESS_NETWORK_INFO, &info_str);
+	if (status)
+		return status;
+
+	return PJ_SUCCESS;
+}

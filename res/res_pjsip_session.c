@@ -2947,6 +2947,11 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 		SCOPE_EXIT_RTN_VALUE(-1, "pjsip_inv_invite failed\n");
 	}
 
+	if (transport_state->volte.p_access_network_info[0] &&
+	    volte_add_p_access_network_info(*tdata, transport_state->volte.p_access_network_info)) {
+		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
+	}
+
 	if (volte_add_sec_agree(*tdata)) {
 		ast_log(LOG_ERROR, "Failed to add sec-agree.\n");
 	}
