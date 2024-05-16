@@ -1879,6 +1879,8 @@ volte_failed:
 		}
 
 		save_response_fields_to_transport(response);
+		if (response->client_state->ims_aka)
+			store_volte_p_associated_uri(response);
 	} else if (response->client_state->destroy) {
 		/* We need to deal with the pending destruction instead. */
 	} else if (response->retry_after) {
