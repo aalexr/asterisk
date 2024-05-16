@@ -827,6 +827,12 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		goto out;
 	}
 
+	if (transport_state->volte.p_access_network_info[0] &&
+	    volte_add_p_access_network_info(tdata, transport_state->volte.p_access_network_info)) {
+		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
+		goto out;
+	}
+
 	if (volte_add_outbound_initial_authorization(tdata, endpt->fromdomain, &client_state->outbound_auths)) {
 		ast_log(LOG_ERROR, "Failed to add initial authorization header.\n");
 		goto out;
@@ -2884,6 +2890,56 @@ static int ami_authresponse(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static int ami_access_network_info(struct mansession *s, const struct message *m)
+{
+	const char *registration_name = astman_get_header(m, "Registration");
+	const char *info_str = astman_get_header(m, "Info");
+	struct sip_outbound_registration_state *state;
+	struct ast_sip_transport_state *transport_state = NULL;
+
+	if (ast_strlen_zero(registration_name)) {
+		ast_log(LOG_ERROR, "Registration parameter missing.\n");
+		astman_send_error(s, m, "Registration parameter missing");
+		return 0;
+	}
+
+	state = get_state(registration_name);
+	if (!state) {
+		ast_log(LOG_ERROR, "Unable to retrieve registration entry.\n");
+		astman_send_error(s, m, "Unable to retrieve registration entry\n");
+		return 0;
+	}
+	if (!state->client_state) {
+		ast_debug(1, "No client state.\n");
+		astman_send_error(s, m, "No client state\n");
+		ao2_ref(state, -1);
+		return 0;
+	}
+	if (get_endpoint_transport_transport_state(state->client_state, NULL, NULL, &transport_state)) {
+		ao2_ref(state, -1);
+		return 0;
+	}
+	ao2_lock(transport_state);
+
+	if (!info_str) {
+		transport_state->volte.p_access_network_info[0] = '\0';
+	} else if (strlen(info_str) < sizeof(transport_state->volte.p_access_network_info)) {
+		strcpy(transport_state->volte.p_access_network_info, info_str);
+	} else {
+		ast_debug(1, "No pending AuthRequest.\n");
+		astman_send_error(s, m, "No pending AuthRequest\n");
+	}
+
+	if (transport_state->volte.p_access_network_info[0])
+		astman_send_ack(s, m, "Access Network Info set");
+	else
+		astman_send_ack(s, m, "Access Network Info unset");
+	ao2_unlock(transport_state);
+	ao2_cleanup(transport_state);
+	ao2_ref(state, -1);
+	return 0;
+}
+
 struct sip_ami_outbound {
 	struct ast_sip_ami *ami;
 	int registered;
@@ -3367,6 +3423,8 @@ static int load_module(void)
 	ast_manager_register_xml("PJSIPUnregister", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, ami_unregister);
 	ast_manager_register_xml("PJSIPRegister", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, ami_register);
 	ast_manager_register_xml("PJSIPShowRegistrationsOutbound", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, ami_show_outbound_registrations);
+	ast_manager_register_xml("PJSIPAccessNetworkInfo", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING,
+				 ami_access_network_info);
 	ast_manager_register_xml_core("AuthResponse", 0, ami_authresponse);
 
 	/* Clear any previous statsd gauges in case we weren't shutdown cleanly */

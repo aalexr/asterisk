@@ -132,6 +132,8 @@ struct ast_sip_transport_volte {
 	struct pjsip_transport	*transport;
 	/* Assigned URI */
 	char p_associated_uri[1024];
+	/* Access Network Info */
+	char p_access_network_info[1024];
 };
 
 /*!
