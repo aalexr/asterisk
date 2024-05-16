@@ -99,6 +99,7 @@ void event_fullybooted (ami_event_t *event) {
 	    return;
     do_register = 1;
    ami_action(ami, event_response, NULL, "Action: PJSIPRegister\nRegistration: volte_ims");
+   ami_action(ami, event_response, NULL, "Action: PJSIPAccessNetworkInfo\nRegistration: volte_ims\nInfo: hello");
 }
 
 int hex_to_octet_string(const char *name, const char *input, uint8_t *output, size_t output_size)
