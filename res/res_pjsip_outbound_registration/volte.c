@@ -235,6 +235,7 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 		ast_log(LOG_ERROR, "Given 'ealg' not supported.\n");
 		return -EINVAL;
 	}
+	ast_assert(sizeof(auth_algo.buf) >= 160);
 	memset(&auth_algo, 0, sizeof(auth_algo));
 	strcpy(auth_algo.algo.alg_name, g_ipsec_alg[i].kernel_name);
 	switch (i) {
@@ -507,20 +508,20 @@ pj_status_t volte_reset_transport(struct ast_sip_transport_state *transport_stat
 
 	/* Cleanup old transport. */
 	old_port_c = pj_sockaddr_get_port(&transport_state->volte.local_addr_c);
-	if (old_port_c > 0 && old_port_c < 65535 && transport_state->volte.transport_set) {
+	if (old_port_c > 0 && old_port_c < 65535 && transport_state->volte.transport) {
 		/* Create socket with default transport port. */
-		status = transport_state->transport->create_new_sock(transport_state->transport, NULL);
+		status = transport_state->volte.transport->create_new_sock(transport_state->volte.transport, NULL);
 		if (status != PJ_SUCCESS) {
 			ast_log(LOG_ERROR, "Failed to get connection addresses (errno=%d).\n", errno);
 			return status;
 		}
-		status = transport_state->transport->connect_new_sock(transport_state->transport,
+		status = transport_state->volte.transport->connect_new_sock(transport_state->volte.transport,
 				&transport_state->volte.local_addr_c, &transport_state->volte.remote_addr_orig);
 		if (status != PJ_SUCCESS) {
 			ast_log(LOG_ERROR, "Failed to change connection addresses (errno=%d).\n", errno);
 			return status;
 		}
-		transport_state->volte.transport_set = PJ_FALSE;
+		transport_state->volte.transport = NULL;
 	}
 
 	return PJ_SUCCESS;
@@ -611,7 +612,7 @@ pj_status_t volte_set_transport(struct ast_sip_transport_state *transport_state,
 		ast_log(LOG_ERROR, "Failed to change connection addresses (errno=%d).\n", errno);
 		return status;
 	}
-	transport_state->volte.transport_set = PJ_TRUE;
+	transport_state->volte.transport = tdata->tp_info.transport;
 
 	return PJ_SUCCESS;
 }

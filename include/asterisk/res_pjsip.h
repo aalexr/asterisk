@@ -118,17 +118,20 @@ static const pj_str_t AST_PJ_STR_EMPTY = { "", 0 };
  */
 struct ast_sip_transport_volte {
 	/*! Current states for sec-agree */
-	pj_sockaddr	local_addr_c, remote_addr_s;
-	pj_sockaddr	remote_addr_c, local_addr_s;
-	uint32_t	local_spi_c, remote_spi_s;
-	uint32_t	remote_spi_c, local_spi_s;
-	pj_bool_t	local_sa_c_set, remote_sa_s_set;
-	pj_bool_t	remote_sa_c_set, local_sa_s_set;
-	pj_bool_t	local_sp_c_set, remote_sp_s_set;
-	pj_bool_t	remote_sp_c_set, local_sp_s_set;
-	pj_sockaddr	remote_addr_orig;
-	pj_bool_t	transport_set;
-	char		security_server[1024];
+	pj_sockaddr local_addr_c, remote_addr_s;
+	pj_sockaddr remote_addr_c, local_addr_s;
+	uint32_t local_spi_c, remote_spi_s;
+	uint32_t remote_spi_c, local_spi_s;
+	pj_bool_t local_sa_c_set, remote_sa_s_set;
+	pj_bool_t remote_sa_c_set, local_sa_s_set;
+	pj_bool_t local_sp_c_set, remote_sp_s_set;
+	pj_bool_t remote_sp_c_set, local_sp_s_set;
+	pj_sockaddr remote_addr_orig;
+	char security_server[1024];
+	/*! Transport that was used (for reset) */
+	struct pjsip_transport	*transport;
+	/* Assigned URI */
+	char p_associated_uri[1024];
 };
 
 /*!
