@@ -356,6 +356,7 @@ const pj_str_t STR_PORT_C = { "port-c", 6 };
 const pj_str_t STR_PORT_S = { "port-s", 6 };
 const pj_str_t STR_ALG = { "alg", 3 };
 const pj_str_t STR_EALG = { "ealg", 4 };
+const pj_str_t STR_P_ASSOCIATED_URI = { "P-Associated-URI", 16 };
 
 /* Create string header and add given value. */
 static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
@@ -875,6 +876,43 @@ pj_status_t volte_add_auts(pjsip_tx_data *tdata, uint8_t *auts)
 	param->name = STR_AUTS;
 	pj_strdup2(tdata->pool, &param->value, enc_auts);
 	pj_list_insert_before(&auth_hdr->credential.digest.other_param, param);
+
+	return PJ_SUCCESS;
+}
+
+/* Store and get P-Associated-URI. */
+pj_status_t volte_get_p_associated_uri(struct ast_sip_transport_state *transport_state, pjsip_rx_data *rdata)
+{
+	pjsip_generic_string_hdr *pau_hdr;
+	int i, start = 0, end = 0;
+
+	/* Get P-Associated-URI from header. */
+	pau_hdr = pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &STR_P_ASSOCIATED_URI, NULL);
+	if (!pau_hdr || !pau_hdr->hvalue.ptr) {
+		ast_log(LOG_ERROR, "Missing 'P-Associated-URI' in REGISTER response.");
+		return -EINVAL;
+	}
+
+	/* Get first entry, enclosed by <>. */
+	for (i = 0; i < pau_hdr->hvalue.slen; i++) {
+		if (!start && pau_hdr->hvalue.ptr[i] == '<')
+			start = i + 1;
+		if (!end && pau_hdr->hvalue.ptr[i] == '>')
+			end = i;
+	}
+	if (!start || !end) {
+		ast_log(LOG_ERROR, "Missing a value, enclosed by '<....>' in 'P-Associated-URI' in REGISTER response.");
+		return -EINVAL;
+	}
+
+	/* Store. */
+	if (end - start < sizeof(transport_state->volte.p_associated_uri)) {
+		memcpy(transport_state->volte.p_associated_uri, pau_hdr->hvalue.ptr + start, end - start);
+		transport_state->volte.p_associated_uri[end - start] = '\0';
+	} else {
+		ast_log(LOG_ERROR, "P-Associated-URI' too large.");
+		return -EINVAL;
+	}
 
 	return PJ_SUCCESS;
 }

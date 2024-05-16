@@ -1539,6 +1539,26 @@ out:
 	return ret;
 }
 
+static int store_volte_p_associated_uri(struct registration_response *response)
+{
+	struct ast_sip_transport_state *transport_state = NULL;
+	int ret = -1;
+
+	if (get_endpoint_transport_transport_state(response->client_state, NULL, NULL, &transport_state))
+		goto out;
+	ao2_lock(transport_state);
+
+	volte_get_p_associated_uri(transport_state, response->rdata);
+
+	ret = 0;
+
+out:
+	if (transport_state)
+		ao2_unlock(transport_state);
+	ao2_cleanup(transport_state);
+	return ret;
+}
+
 /*! \brief Timer callback function, used just for registrations */
 static void sip_outbound_registration_timer_cb(pj_timer_heap_t *timer_heap, struct pj_timer_entry *entry)
 {
@@ -1717,6 +1737,8 @@ volte_failed:
 		}
 
 		save_response_fields_to_transport(response);
+		if (response->client_state->ims_aka)
+			store_volte_p_associated_uri(response);
 	} else if (response->client_state->destroy) {
 		/* We need to deal with the pending destruction instead. */
 	} else if (response->retry_after) {

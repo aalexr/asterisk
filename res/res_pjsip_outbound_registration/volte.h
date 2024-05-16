@@ -38,3 +38,4 @@ pj_status_t volte_send_authrequest(const char *registration_name, pj_str_t *algo
 pj_status_t volte_authenticate(const char *opc_str, const char *k_str, const char *sqn_str, uint8_t *rand,
 			       uint8_t *autn, uint8_t *out_res, uint8_t *out_ik, uint8_t *out_ck, uint8_t *out_auts);
 pj_status_t volte_add_auts(pjsip_tx_data *tdata, uint8_t *auts);
+pj_status_t volte_get_p_associated_uri(struct ast_sip_transport_state *transport_state, pjsip_rx_data *rdata);
