@@ -53,6 +53,7 @@
 #include "asterisk/vector.h"
 
 #include "res_pjsip_session/pjsip_session.h"
+#include "res_pjsip_session/volte.h"
 
 #define SDP_HANDLER_BUCKETS 11
 
@@ -1643,7 +1644,7 @@ static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session 
 	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0));
 }
 
-static void set_from_header(struct ast_sip_session *session)
+static pj_status_t set_from_header(struct ast_sip_session *session, const char *from_uri)
 {
 	struct ast_party_id effective_id;
 	struct ast_party_id connected_id;
@@ -1657,7 +1658,7 @@ static void set_from_header(struct ast_sip_session *session)
 	const char *pjsip_from_domain;
 
 	if (!session->channel || session->saved_from_hdr) {
-		return;
+		return PJ_SUCCESS;
 	}
 
 	/* We need to save off connected_id for RPID/PAI generation */
@@ -1688,14 +1689,27 @@ static void set_from_header(struct ast_sip_session *session)
 
 	ast_party_id_free(&connected_id);
 
-	if (!ast_strlen_zero(session->endpoint->fromuser)) {
-		dlg_info_name_addr->display.ptr = NULL;
-		dlg_info_name_addr->display.slen = 0;
-		pj_strdup2(dlg_pool, &dlg_info_uri->user, session->endpoint->fromuser);
-	}
+	if (session->endpoint->ims_aka) {
+		/* VoLTE uses the first P-Associated-URI field for 'From:'. */
+		if (!strncmp(from_uri, "tel:", 4)) {
+			pjsip_sip_uri_set_tel(dlg_info_uri);
+		} else if (!!strncmp(from_uri, "sip:", 4)) {
+			ast_log(LOG_ERROR, "P-Associated-URI is not sip/tel, cannot continue to call.\n");
+			return PJ_FALSE;
+		}
+		dlg_info_uri->user.ptr = NULL;
+		dlg_info_uri->user.slen = 0;
+		pj_strdup2(dlg_pool, &dlg_info_uri->host, from_uri + 4);
+	} else {
+		if (!ast_strlen_zero(session->endpoint->fromuser)) {
+			dlg_info_name_addr->display.ptr = NULL;
+			dlg_info_name_addr->display.slen = 0;
+			pj_strdup2(dlg_pool, &dlg_info_uri->user, session->endpoint->fromuser);
+		}
 
-	if (!ast_strlen_zero(session->endpoint->fromdomain)) {
-		pj_strdup2(dlg_pool, &dlg_info_uri->host, session->endpoint->fromdomain);
+		if (!ast_strlen_zero(session->endpoint->fromdomain)) {
+			pj_strdup2(dlg_pool, &dlg_info_uri->host, session->endpoint->fromdomain);
+		}
 	}
 
 	/*
@@ -1734,7 +1748,9 @@ static void set_from_header(struct ast_sip_session *session)
 		}
 	} else {
 		ast_sip_add_usereqphone(session->endpoint, dlg_pool, dlg_info->uri);
-    }
+	}
+
+	return PJ_SUCCESS;
 }
 
 /*
@@ -2862,9 +2878,36 @@ void ast_sip_session_send_request(struct ast_sip_session *session, pjsip_tx_data
 	ast_sip_session_send_request_with_cb(session, tdata, NULL);
 }
 
+static pj_status_t get_transport_transport_state(struct ast_sip_endpoint *endpoint,
+						 struct ast_sip_transport **transp,
+						 struct ast_sip_transport_state **transport_state)
+{
+	if (transp && (!endpoint->transport ||
+	    (!(*transp = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "transport", endpoint->transport))))) {
+		ast_log(LOG_ERROR, "No transport config '%s'\n", endpoint->transport);
+		goto error;
+	}
+	if (transport_state && (!endpoint->transport ||
+	    (!(*transport_state = ast_sip_get_transport_state(endpoint->transport))))) {
+		ast_log(LOG_ERROR, "No transport_state found for endpoint '%s'. Cannot register.\n",
+			endpoint->transport);
+		goto error;
+	}
+
+	return 0;
+
+error:
+	ao2_cleanup(*transp);
+	ao2_cleanup(*transport_state);
+	return -1;
+}
+
 int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data **tdata)
 {
 	pjmedia_sdp_session *offer;
+	struct ast_sip_transport_state *transport_state = NULL;
+	int ims_aka = session->endpoint->ims_aka;
+
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
 	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0))) {
@@ -2880,15 +2923,49 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 	}
 #endif
 
+	if (ims_aka) {
+		if (get_transport_transport_state(session->endpoint, NULL, &transport_state)) {
+			SCOPE_EXIT_RTN_VALUE(-1, "Failed to get transport state\n");
+		}
+		ao2_lock(transport_state);
+	}
+
 	/*
 	 * We MUST call set_from_header() before pjsip_inv_invite.  If we don't, the
 	 * From in the initial INVITE will be wrong but the rest of the messages will be OK.
 	 */
-	set_from_header(session);
+	if (set_from_header(session, (ims_aka) ? transport_state->volte.p_associated_uri : NULL)) {
+		if (transport_state)
+			ao2_unlock(transport_state);
+		ao2_cleanup(transport_state);
+		SCOPE_EXIT_RTN_VALUE(-1, "set_from_header failed\n");
+	}
 
 	if (pjsip_inv_invite(session->inv_session, tdata) != PJ_SUCCESS) {
+		if (transport_state)
+			ao2_unlock(transport_state);
+		ao2_cleanup(transport_state);
 		SCOPE_EXIT_RTN_VALUE(-1, "pjsip_inv_invite failed\n");
 	}
+
+	if (ims_aka) {
+		if (transport_state->volte.p_access_network_info[0] &&
+		    volte_add_p_access_network_info(*tdata, transport_state->volte.p_access_network_info)) {
+			ast_log(LOG_ERROR, "Failed to add P-Access-Network-info header.\n");
+		}
+
+		if (volte_add_sec_agree(*tdata)) {
+			ast_log(LOG_ERROR, "Failed to add sec-agree headers.\n");
+		}
+
+		if (volte_add_security_verify(transport_state, *tdata)) {
+			ast_log(LOG_ERROR, "Failed to add Security-Verify header.\n");
+		}
+	}
+
+	if (transport_state)
+		ao2_unlock(transport_state);
+	ao2_cleanup(transport_state);
 
 	SCOPE_EXIT_RTN_VALUE(0);
 }
