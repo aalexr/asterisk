@@ -2906,6 +2906,7 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 {
 	pjmedia_sdp_session *offer;
 	struct ast_sip_transport_state *transport_state = NULL;
+	int ims_aka = session->endpoint->ims_aka;
 
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
@@ -2922,7 +2923,7 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 	}
 #endif
 
-	if (session->endpoint->ims_aka) {
+	if (ims_aka) {
 		if (get_transport_transport_state(session->endpoint, NULL, &transport_state)) {
 			SCOPE_EXIT_RTN_VALUE(-1, "Failed to get transport state\n");
 		}
@@ -2933,7 +2934,7 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 	 * We MUST call set_from_header() before pjsip_inv_invite.  If we don't, the
 	 * From in the initial INVITE will be wrong but the rest of the messages will be OK.
 	 */
-	if (set_from_header(session, transport_state->volte.p_associated_uri)) {
+	if (set_from_header(session, (ims_aka) ? transport_state->volte.p_associated_uri : NULL)) {
 		if (transport_state)
 			ao2_unlock(transport_state);
 		ao2_cleanup(transport_state);
@@ -2947,17 +2948,19 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 		SCOPE_EXIT_RTN_VALUE(-1, "pjsip_inv_invite failed\n");
 	}
 
-	if (transport_state->volte.p_access_network_info[0] &&
-	    volte_add_p_access_network_info(*tdata, transport_state->volte.p_access_network_info)) {
-		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
-	}
+	if (ims_aka) {
+		if (transport_state->volte.p_access_network_info[0] &&
+		    volte_add_p_access_network_info(*tdata, transport_state->volte.p_access_network_info)) {
+			ast_log(LOG_ERROR, "Failed to add P-Access-Network-info header.\n");
+		}
 
-	if (volte_add_sec_agree(*tdata)) {
-		ast_log(LOG_ERROR, "Failed to add sec-agree.\n");
-	}
+		if (volte_add_sec_agree(*tdata)) {
+			ast_log(LOG_ERROR, "Failed to add sec-agree headers.\n");
+		}
 
-	if (volte_add_security_verify(transport_state, *tdata)) {
-		ast_log(LOG_ERROR, "Failed to add security verify.\n");
+		if (volte_add_security_verify(transport_state, *tdata)) {
+			ast_log(LOG_ERROR, "Failed to add Security-Verify header.\n");
+		}
 	}
 
 	if (transport_state)
