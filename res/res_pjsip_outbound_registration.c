@@ -827,12 +827,6 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		goto out;
 	}
 
-	if (transport_state->volte.p_access_network_info[0] &&
-	    volte_add_p_access_network_info(tdata, transport_state->volte.p_access_network_info)) {
-		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
-		goto out;
-	}
-
 	if (volte_add_outbound_initial_authorization(tdata, endpt->fromdomain, &client_state->outbound_auths)) {
 		ast_log(LOG_ERROR, "Failed to add initial authorization header.\n");
 		goto out;
@@ -1532,6 +1526,11 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 	}
 	if (volte_add_security_verify(transport_state, response->old_request)) {
 		ast_log(LOG_ERROR, "Failed to add security verify.\n");
+		goto out;
+	}
+	if (transport_state->volte.p_access_network_info[0] &&
+	    volte_add_p_access_network_info(response->old_request, transport_state->volte.p_access_network_info)) {
+		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
 		goto out;
 	}
 	response->client_state->volte_state = VOLTE_STATE_RESPONSE;
