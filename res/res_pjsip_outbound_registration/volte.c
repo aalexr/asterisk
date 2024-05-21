@@ -269,8 +269,8 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 		  pj_sockaddr_get_port(&transport_state->volte.remote_addr_s), transport_state->volte.remote_spi_s);
 	ast_debug(1, "xfrm: remote client: %s:%d (SPI=0x%08x) local server: %s:%d (SPI=0x%08x)\n",
 		  sockaddr_storage_to_string(&remote_addr_c, src_str, sizeof(src_str)),
-		  pj_sockaddr_get_port(&transport_state->volte.remote_addr_s), transport_state->volte.remote_spi_c,
-		  sockaddr_storage_to_string(&local_addr_c, dst_str, sizeof(dst_str)),
+		  pj_sockaddr_get_port(&transport_state->volte.remote_addr_c), transport_state->volte.remote_spi_c,
+		  sockaddr_storage_to_string(&local_addr_s, dst_str, sizeof(dst_str)),
 		  pj_sockaddr_get_port(&transport_state->volte.local_addr_s), transport_state->volte.local_spi_s);
 	ast_debug(1, "xfrm: alg: %s ealg: %s\n", auth_algo.algo.alg_name, ciph_algo.algo.alg_name);
 
@@ -577,8 +577,7 @@ pj_status_t volte_set_transport(struct ast_sip_transport_state *transport_state,
 	local_port_c = pj_sockaddr_get_port(&transport_state->volte.local_addr_c);
 	local_port_s = pj_sockaddr_get_port(&transport_state->volte.local_addr_s);
 	memcpy(&transport_state->volte.local_addr_c, &tdata->tp_info.transport->local_addr, sizeof(pj_sockaddr));
-	memcpy(&transport_state->volte.local_addr_s, &tdata->tp_info.transport->factory->local_addr,
-	       sizeof(pj_sockaddr));
+	memcpy(&transport_state->volte.local_addr_s, &tdata->tp_info.transport->local_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.remote_addr_c, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.remote_addr_s, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.remote_addr_orig, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
