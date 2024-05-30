@@ -546,6 +546,7 @@ AST_EXT_LIB_SETUP([COROSYNC], [Corosync], [cpg])
 AST_EXT_LIB_SETUP_OPTIONAL([COROSYNC_CFG_STATE_TRACK], [A callback only in corosync 1.x], [COROSYNC], [cfg])
 AST_EXT_LIB_SETUP([CRYPT], [password and data encryption], [crypt])
 AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
+AST_EXT_LIB_SETUP([EVS], [3GPP EVS Audio Decoder/Encoder], [3gpp-evs])
 AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec], [avcodec])
 AST_EXT_LIB_SETUP([GSM], [External GSM], [gsm], [, use 'internal' GSM otherwise])
 AST_EXT_LIB_SETUP([ILBC], [System iLBC], [ilbc], [, use 'internal' iLBC otherwise])
@@ -2677,6 +2678,8 @@ AST_EXT_LIB_CHECK([CODEC2], [codec2], [codec2_create], [codec2/codec2.h])
 
 AST_EXT_LIB_CHECK([COROSYNC], [cpg], [cpg_join], [corosync/cpg.h], [-lcpg -lcfg])
 AST_EXT_LIB_CHECK([COROSYNC_CFG_STATE_TRACK], [cfg], [corosync_cfg_state_track], [corosync/cfg.h], [-lcfg])
+
+AST_EXT_LIB_CHECK([EVS], [3gpp-evs], [evs_enc], [3gpp-evs/prot.h])
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
