@@ -233,6 +233,22 @@ void event_disconnect (ami_event_t *event) {
     ev_timer_start(EV_DEFAULT, &timer_reconnect);
 }
 
+static int registered=0;
+
+void event_registry (ami_event_t *event) {
+	const char *status_str;
+	status_str = ami_getvar(event, "Status");
+
+	printf("registry-status=%s\n", status_str);
+
+	if (!strcasecmp(status_str, "Registered")) {
+		if (!registered) {
+			registered = 1;
+			ami_action(ami, event_response, NULL, "Action: PJSIPUnregister\nRegistration: volte_ims");
+		}
+	}
+}
+
 int main (int argc, char *argv[]) {
     ami = ami_new(EV_DEFAULT);
     if (ami == NULL) {
@@ -263,6 +279,8 @@ int main (int argc, char *argv[]) {
     ami_event_register(ami, event_disconnect, NULL, "Disconnect");
 
     ami_event_register(ami, event_authrequest, NULL, "Event: AuthRequest");
+
+    ami_event_register(ami, event_registry, NULL, "Event: Registry");
 
     printf("\n");
     ami_dump_lists(ami);
