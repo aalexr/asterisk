@@ -126,7 +126,7 @@ struct ast_sip_transport_volte {
 	pj_bool_t remote_sa_c_set, local_sa_s_set;
 	pj_bool_t local_sp_c_set, remote_sp_s_set;
 	pj_bool_t remote_sp_c_set, local_sp_s_set;
-	pj_sockaddr remote_addr_orig;
+	pj_sockaddr local_addr_orig, remote_addr_orig;
 	char security_server[1024];
 	/*! Transport that was used (for reset) */
 	struct pjsip_transport	*transport;

@@ -503,15 +503,25 @@ pj_status_t volte_del_authorization(pjsip_tx_data *tdata)
 pj_status_t volte_reset_transport(struct ast_sip_transport_state *transport_state)
 {
 	pj_status_t status;
-	int old_port_c;
+	int old_port_c, old_port_s;
 
 	/* Cleanup IPSec transform. */
 	volte_cleanup_xfrm(transport_state);
 
-	/* Cleanup old transport. */
+	/* Cleanup old transports. */
+	old_port_s = pj_sockaddr_get_port(&transport_state->volte.local_addr_s);
+	if (old_port_s > 0 && old_port_s < 65535 && transport_state->volte.transport) {
+		/* Create factory with original transport port. */
+		status = pjsip_tcp_transport_restart(transport_state->volte.transport->factory,
+						     &transport_state->volte.local_addr_orig, NULL);
+		if (status != PJ_SUCCESS) {
+			ast_log(LOG_ERROR, "Failed to change server connection addresses (errno=%d).\n", errno);
+			return status;
+		}
+	}
 	old_port_c = pj_sockaddr_get_port(&transport_state->volte.local_addr_c);
 	if (old_port_c > 0 && old_port_c < 65535 && transport_state->volte.transport) {
-		/* Create socket with default transport port. */
+		/* Create outgoing socket with original transport port. */
 		status = transport_state->volte.transport->create_new_sock(transport_state->volte.transport, NULL);
 		if (status != PJ_SUCCESS) {
 			ast_log(LOG_ERROR, "Failed to get connection addresses (errno=%d).\n", errno);
@@ -523,8 +533,9 @@ pj_status_t volte_reset_transport(struct ast_sip_transport_state *transport_stat
 			ast_log(LOG_ERROR, "Failed to change connection addresses (errno=%d).\n", errno);
 			return status;
 		}
-		transport_state->volte.transport = NULL;
 	}
+
+	transport_state->volte.transport = NULL;
 
 	return PJ_SUCCESS;
 }
@@ -578,6 +589,15 @@ pj_status_t volte_set_transport(struct ast_sip_transport_state *transport_state,
 	local_port_s = pj_sockaddr_get_port(&transport_state->volte.local_addr_s);
 	memcpy(&transport_state->volte.local_addr_c, &tdata->tp_info.transport->local_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.local_addr_s, &tdata->tp_info.transport->local_addr, sizeof(pj_sockaddr));
+	memcpy(&transport_state->volte.local_addr_orig, &tdata->tp_info.transport->factory->local_addr, sizeof(pj_sockaddr));
+	if (transport_state->volte.local_addr_orig.addr.sa_family == PJ_AF_INET6) {
+		memset(&transport_state->volte.local_addr_orig.ipv6.sin6_addr, 0,
+		       sizeof(transport_state->volte.local_addr_orig.ipv6.sin6_addr));
+	} else {
+		memset(&transport_state->volte.local_addr_orig.ipv4.sin_addr, 0,
+		       sizeof(transport_state->volte.local_addr_orig.ipv4.sin_addr));
+	}
+
 	memcpy(&transport_state->volte.remote_addr_c, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.remote_addr_s, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
 	memcpy(&transport_state->volte.remote_addr_orig, &tdata->tp_info.dst_addr, sizeof(pj_sockaddr));
@@ -591,10 +611,16 @@ pj_status_t volte_set_transport(struct ast_sip_transport_state *transport_state,
 	transport_state->volte.remote_spi_s = remote_spi_s;
 	volte_set_xfrm(transport_state, alg, ealg, ik);
 
-	/* Create socket with new transport port. */
-	if (!tdata->tp_info.transport) {
-		ast_log(LOG_ERROR, "The Message has no transport. Please fix!\n");
-		return -ENOTSUP;
+	/* Create sockets (listening and outgoing) with new transport ports. */
+	if (!tdata->tp_info.transport || !tdata->tp_info.transport->factory) {
+		ast_log(LOG_ERROR, "The Message has no transport or no transport factory. Please fix!\n");
+		return -EINVAL;
+	}
+	status = pjsip_tcp_transport_restart(tdata->tp_info.transport->factory, &transport_state->volte.local_addr_s,
+					     NULL);
+	if (status != PJ_SUCCESS) {
+		ast_log(LOG_ERROR, "Failed to change server connection addresses (errno=%d).\n", errno);
+		return status;
 	}
 	if (!tdata->tp_info.transport->create_new_sock || !tdata->tp_info.transport->connect_new_sock) {
 		ast_log(LOG_ERROR, "The transport protocol does not support socket change. Please fix!\n");
@@ -603,14 +629,14 @@ pj_status_t volte_set_transport(struct ast_sip_transport_state *transport_state,
 	status = tdata->tp_info.transport->create_new_sock(tdata->tp_info.transport,
 								 &transport_state->volte.local_addr_c);
 	if (status != PJ_SUCCESS) {
-		ast_log(LOG_ERROR, "Failed to get connection addresses (errno=%d).\n", errno);
+		ast_log(LOG_ERROR, "Failed to get client connection addresses (errno=%d).\n", errno);
 		return status;
 	}
 	status = tdata->tp_info.transport->connect_new_sock(tdata->tp_info.transport,
 								  &transport_state->volte.local_addr_c,
 								  &transport_state->volte.remote_addr_s);
 	if (status != PJ_SUCCESS) {
-		ast_log(LOG_ERROR, "Failed to change connection addresses (errno=%d).\n", errno);
+		ast_log(LOG_ERROR, "Failed to change client connection addresses (errno=%d).\n", errno);
 		return status;
 	}
 	transport_state->volte.transport = tdata->tp_info.transport;
