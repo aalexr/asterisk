@@ -134,6 +134,11 @@ struct ast_sip_transport_volte {
 	char p_associated_uri[1024];
 	/* Access Network Info */
 	char p_access_network_info[1024];
+	/* Authorization header from last REGISTER */
+	char authorization[1024];
+	/* cnonce + nc from REGISTER */
+	char cnonce[256];
+	uint32_t nc;
 };
 
 /*!
@@ -611,6 +616,10 @@ struct ast_sip_auth {
 		/*! IMS Authentication password */
 		char ims_res[8];
 		int ims_res_len;
+		/*! IMS Authentication cnonce+nc */
+		char ims_cnonce[256];
+		int ims_cnonce_len;
+		uint32_t ims_nc;
 		/*! Authentication credentials in MD5 format (hash of user:realm:pass) */
 		AST_STRING_FIELD(md5_creds);
 		/*! Refresh token to use for OAuth authentication */

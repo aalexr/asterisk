@@ -358,6 +358,7 @@ const pj_str_t STR_ALG = { "alg", 3 };
 const pj_str_t STR_EALG = { "ealg", 4 };
 const pj_str_t STR_P_ASSOCIATED_URI = { "P-Associated-URI", 16 };
 const pj_str_t STR_P_ACCESS_NETWORK_INFO = { "P-Access-Network-Info", 21 };
+const pj_str_t STR_EXPIRES = { "Expires", 7 };
 
 /* Create string header and add given value. */
 static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
@@ -477,7 +478,7 @@ pj_status_t volte_init_authorization(pjsip_tx_data *tdata, const char *fromdomai
 		 "Digest uri=\"sip:%s\",username=\"%s\",response=\"\",realm=\"%s\",nonce=\"\"",
 		 fromdomain, username, fromdomain);
 
-	const pj_str_t authorization_str = {authorization, strlen(authorization)};
+	pj_str_t authorization_str = {authorization, strlen(authorization)};
 	status = add_value_string_hdr(tdata, &STR_AUTHORIZATION, &authorization_str);
 	if (status)
 		return status;
@@ -540,9 +541,8 @@ pj_status_t volte_reset_transport(struct ast_sip_transport_state *transport_stat
 	return PJ_SUCCESS;
 }
 
-/* Add security client header. */
-pj_status_t volte_add_security_client(struct ast_sip_transport_state *transport_state, pjsip_tx_data *tdata,
-				      int port_c, int port_s)
+/* Alloc transport. */
+pj_status_t volte_alloc_transport(struct ast_sip_transport_state *transport_state, int port_c, int port_s)
 {
 	pj_status_t status;
 
@@ -565,8 +565,21 @@ pj_status_t volte_add_security_client(struct ast_sip_transport_state *transport_
 	if (status)
 		return status;
 
+	return PJ_SUCCESS;
+}
+
+/* Add security client header. */
+pj_status_t volte_add_security_client(struct ast_sip_transport_state *transport_state, pjsip_tx_data *tdata)
+{
+	int local_port_c, local_port_s;
+	pj_status_t status;
+
+	/* Get local ports. */
+	local_port_c = pj_sockaddr_get_port(&transport_state->volte.local_addr_c);
+	local_port_s = pj_sockaddr_get_port(&transport_state->volte.local_addr_s);
+
 	status = add_securety_client_hdr(tdata, g_ipsec_alg, g_ipsec_ealg, transport_state->volte.local_spi_c,
-					 transport_state->volte.local_spi_s, port_c, port_s);
+					 transport_state->volte.local_spi_s, local_port_c, local_port_s);
 	if (status)
 		return status;
 
@@ -906,6 +919,33 @@ pj_status_t volte_add_auts(pjsip_tx_data *tdata, uint8_t *auts)
 	return PJ_SUCCESS;
 }
 
+pj_status_t volte_store_cnonce_nc(struct ast_sip_transport_state *transport_state, pjsip_tx_data *tdata)
+{
+	pjsip_authorization_hdr *auth_hdr;
+
+	auth_hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_AUTHORIZATION, NULL);
+	if (!auth_hdr) {
+		ast_log(LOG_ERROR, "Authorization header not found in TX message. Please fix!\n");
+		return -EINVAL;
+	}
+
+	/* Store cnonce and nc for unregister. */
+	if (auth_hdr->credential.digest.cnonce.slen < sizeof(transport_state->volte.cnonce)) {
+		char nc_str[auth_hdr->credential.digest.nc.slen + 1];
+		memcpy(transport_state->volte.cnonce, auth_hdr->credential.digest.cnonce.ptr,
+		       auth_hdr->credential.digest.cnonce.slen);
+		transport_state->volte.cnonce[auth_hdr->credential.digest.cnonce.slen] = '\0';
+		memcpy(nc_str, auth_hdr->credential.digest.nc.ptr, auth_hdr->credential.digest.nc.slen);
+		nc_str[auth_hdr->credential.digest.nc.slen] = '\0';
+		transport_state->volte.nc = strtoul(nc_str, NULL, 16);
+	} else {
+		ast_log(LOG_ERROR, "cnonce too large.");
+		return -EINVAL;
+	}
+
+	return PJ_SUCCESS;
+}
+
 /* Store and get P-Associated-URI. */
 pj_status_t volte_get_p_associated_uri(struct ast_sip_transport_state *transport_state, pjsip_rx_data *rdata)
 {
@@ -954,6 +994,20 @@ pj_status_t volte_add_p_access_network_info(pjsip_tx_data *tdata, char *info)
 	status = add_value_string_hdr(tdata, &STR_P_ACCESS_NETWORK_INFO, &info_str);
 	if (status)
 		return status;
+
+	return PJ_SUCCESS;
+}
+
+/* Set Expires header to 0. */
+pj_status_t volte_expires_0(pjsip_tx_data *tdata)
+{
+	pjsip_generic_int_hdr *expires_hdr;
+
+	/* remove double authentication header */
+	expires_hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_EXPIRES, NULL);
+	if (expires_hdr) {
+		expires_hdr->ivalue = 0;
+	}
 
 	return PJ_SUCCESS;
 }

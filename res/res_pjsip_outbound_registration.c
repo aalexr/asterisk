@@ -388,6 +388,8 @@ struct sip_outbound_registration {
 enum volte_state {
 	/* !\brief Send first registration. */
 	VOLTE_STATE_REGISTER,
+	/* !\brief Send unregistration. */
+	VOLTE_STATE_UNREGISTER,
 	/* !\brief Wait for SIM keys to be provided. */
 	VOLTE_STATE_SIM_REQUEST,
 	/* !\brief SIM responded with keys. */
@@ -473,6 +475,8 @@ struct sip_outbound_registration_client_state {
 	enum volte_state volte_state;
 	/*! \brief Current pending respones, while waiting for USIM data */
 	struct registration_response *volte_response;
+	/*! \brief The response message that includes the challenge */
+	pjsip_rx_data *challenge;
 	/*! \brief Non-zero if we have attempted sending a REGISTER with resync */
 	unsigned int resync_attempted:1;
 };
@@ -483,6 +487,31 @@ struct sip_outbound_registration_state {
 	struct sip_outbound_registration *registration;
 	/*! \brief Client state information */
 	struct sip_outbound_registration_client_state *client_state;
+};
+
+/*! \brief Structure for registration response */
+struct registration_response {
+	/*! \brief Response code for the registration attempt */
+	int code;
+	/*! \brief Expiration time for registration */
+	int expiration;
+	/*! \brief Retry-After value */
+	int retry_after;
+	/*! \brief Outbound registration client state */
+	struct sip_outbound_registration_client_state *client_state;
+	/*! \brief The response message */
+	pjsip_rx_data *rdata;
+	/*! \brief Request for which the response was received */
+	pjsip_tx_data *old_request;
+	/*! \brief Key for the reliable transport in use */
+	char transport_key[IP6ADDR_COLON_PORT_BUFLEN];
+	/*! \breif USIM authentication response */
+	uint8_t sim_res[8];
+	uint8_t sim_ik[16];
+	uint8_t sim_ck[16];
+	uint8_t sim_auts[14];
+	/*! \brief Timer for USIM reply timeout */
+	pj_timer_entry sim_timer;
 };
 
 /*! Time needs to be long enough for a transaction to timeout if nothing replies. */
@@ -800,9 +829,39 @@ error:
 	return -1;
 }
 
-static pj_status_t volte_registration_client(struct sip_outbound_registration_client_state *client_state,
-					     pjsip_tx_data *tdata)
+static struct ast_sip_auth *volte_get_sip_auth(const struct ast_sip_auth_vector *auth_vector)
 {
+	size_t auth_size = AST_VECTOR_SIZE(auth_vector);
+	struct ast_sip_auth *auths[auth_size], *auth = NULL;
+	int idx;
+
+	memset(auths, 0, sizeof(auths));
+	if (ast_sip_retrieve_auths(auth_vector, auths)) {
+		ast_log(LOG_ERROR, "No authentication vector found. Please configure authentication for IMS\n");
+		goto cleanup;
+	}
+
+	for (idx = 0; idx < auth_size; ++idx) {
+		if (auths[idx]->type == AST_SIP_AUTH_TYPE_IMS_AKA)
+			break;
+	}
+
+	if (idx == auth_size) {
+		ast_log(LOG_ERROR, "No authentication vector found with type=ims_aka. Please fix config.\n");
+		goto cleanup;
+	}
+
+	auth = auths[idx];
+
+cleanup:
+	ast_sip_cleanup_auths(auths, auth_size);
+	return auth;
+}
+
+static pj_status_t volte_registration_client(struct sip_outbound_registration_client_state *client_state,
+					     pjsip_tx_data **tdata_p)
+{
+	pjsip_tx_data *tdata = *tdata_p;
 	struct ast_sip_endpoint *endpt = NULL;
 	struct ast_sip_transport *transp = NULL;
 	struct ast_sip_transport_state *transport_state = NULL;
@@ -822,29 +881,81 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		goto out;
 	}
 
-	if (volte_del_authorization(tdata)) {
-		ast_log(LOG_ERROR, "Failed to remove authorization header.\n");
-		goto out;
-	}
+	if (client_state->volte_state == VOLTE_STATE_REGISTER) {
+		/* Register case. */
+		if (volte_add_sec_agree(tdata)) {
+			ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
+			goto out;
+		}
 
-	if (volte_add_outbound_initial_authorization(tdata, endpt->fromdomain, &client_state->outbound_auths)) {
-		ast_log(LOG_ERROR, "Failed to add initial authorization header.\n");
-		goto out;
-	}
+		if (volte_del_authorization(tdata)) {
+			ast_log(LOG_ERROR, "Failed to remove authorization header.\n");
+			goto out;
+		}
 
-	if (volte_add_sec_agree(tdata)) {
-		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
-		goto out;
-	}
+		if (volte_add_outbound_initial_authorization(tdata, endpt->fromdomain, &client_state->outbound_auths)) {
+			ast_log(LOG_ERROR, "Failed to add initial authorization header.\n");
+			goto out;
+		}
 
-	if (volte_reset_transport(transport_state)) {
-		ast_log(LOG_ERROR, "Failed to reset transport. Ignoring!\n");
-		goto out;
-	}
+		if (volte_reset_transport(transport_state)) {
+			ast_log(LOG_ERROR, "Failed to reset transport. Ignoring!\n");
+			goto out;
+		}
 
-	if (volte_add_security_client(transport_state, tdata, transp->ims_port_c, transp->ims_port_s)) {
-		ast_log(LOG_ERROR, "Failed to add security client header.\n");
-		goto out;
+		if (volte_alloc_transport(transport_state, transp->ims_port_c, transp->ims_port_s)) {
+			ast_log(LOG_ERROR, "Failed to alloc transport.\n");
+			goto out;
+		}
+
+		if (volte_add_security_client(transport_state, tdata)) {
+			ast_log(LOG_ERROR, "Failed to add security client header.\n");
+			goto out;
+		}
+	} else {
+		struct ast_sip_auth *auth;
+
+		/* Unregister case. */
+		if (!(auth = volte_get_sip_auth(&client_state->outbound_auths)))
+			goto out;
+
+		/* Set 'stale', so that pjsip accpepts no change in cnonce.  */
+		{
+			const pj_str_t STR_WWW_AUTH = { "WWW-Authenticate", 16 };
+			pjsip_www_authenticate_hdr *auth_hdr;
+			auth_hdr = pjsip_msg_find_hdr_by_name(client_state->challenge->msg_info.msg, &STR_WWW_AUTH,
+							      NULL);
+			if (auth_hdr)
+				auth_hdr->challenge.digest.stale = 1;
+		}
+
+		if (!client_state->challenge) {
+			ast_log(LOG_ERROR, "No response data from previous register.\n");
+			goto out;
+		}
+		if (!client_state->last_tdata) {
+			ast_log(LOG_ERROR, "No transmit data from previous register.\n");
+			goto out;
+		}
+		if (strlen(transport_state->volte.cnonce) > sizeof(auth->ims_cnonce)) {
+			ast_log(LOG_ERROR, "Stored nonce is too large, please fix!\n");
+			goto out;
+		}
+		auth->ims_cnonce_len = strlen(transport_state->volte.cnonce);
+		memcpy(auth->ims_cnonce, transport_state->volte.cnonce, strlen(transport_state->volte.cnonce));
+		++transport_state->volte.nc;
+		auth->ims_nc = transport_state->volte.nc;
+		if (ast_sip_create_request_with_auth(&client_state->outbound_auths,
+				client_state->challenge, client_state->last_tdata, &tdata)) {
+			ast_log(LOG_ERROR, "Failed to create authorization header.\n");
+			goto out;
+		}
+		volte_expires_0(tdata);
+
+		/* We drop the old message and hold the reference for the new message. */
+		pjsip_tx_data_dec_ref(*tdata_p);
+		pjsip_tx_data_add_ref(tdata);
+		*tdata_p = tdata;
 	}
 
 	ret = 0;
@@ -895,8 +1006,9 @@ static pj_status_t registration_client_send(struct sip_outbound_registration_cli
 	ast_sip_tpselector_unref(&selector);
 
 	/* Create initial IMS headers and reset transport. */
-	if (client_state->ims_aka && client_state->volte_state == VOLTE_STATE_REGISTER) {
-		if (volte_registration_client(client_state, tdata)) {
+	if (client_state->ims_aka && (client_state->volte_state == VOLTE_STATE_REGISTER ||
+	    client_state->volte_state == VOLTE_STATE_UNREGISTER)) {
+		if (volte_registration_client(client_state, &tdata)) {
 			pjsip_tx_data_dec_ref(tdata);
 			ao2_ref(client_state, -1);
 			return -1;
@@ -1141,31 +1253,6 @@ static int handle_client_state_destruction(void *data)
 	return 0;
 }
 
-/*! \brief Structure for registration response */
-struct registration_response {
-	/*! \brief Response code for the registration attempt */
-	int code;
-	/*! \brief Expiration time for registration */
-	int expiration;
-	/*! \brief Retry-After value */
-	int retry_after;
-	/*! \brief Outbound registration client state */
-	struct sip_outbound_registration_client_state *client_state;
-	/*! \brief The response message */
-	pjsip_rx_data *rdata;
-	/*! \brief Request for which the response was received */
-	pjsip_tx_data *old_request;
-	/*! \brief Key for the reliable transport in use */
-	char transport_key[IP6ADDR_COLON_PORT_BUFLEN];
-	/*! \breif USIM authentication response */
-	uint8_t sim_res[8];
-	uint8_t sim_ik[16];
-	uint8_t sim_ck[16];
-	uint8_t sim_auts[14];
-	/*! \brief Timer for USIM reply timeout */
-	pj_timer_entry sim_timer;
-};
-
 /*! \brief Helper function which cancels the timer on registration response */
 static void cancel_sim_timer(struct registration_response *response)
 {
@@ -1397,35 +1484,6 @@ static void save_response_fields_to_transport(struct registration_response *resp
 	}
 }
 
-static struct ast_sip_auth *volte_get_sip_auth(const struct ast_sip_auth_vector *auth_vector)
-{
-	size_t auth_size = AST_VECTOR_SIZE(auth_vector);
-	struct ast_sip_auth *auths[auth_size], *auth = NULL;
-	int idx;
-
-	memset(auths, 0, sizeof(auths));
-	if (ast_sip_retrieve_auths(auth_vector, auths)) {
-		ast_log(LOG_ERROR, "No authentication vector found. Please configure authentication for IMS\n");
-		goto cleanup;
-	}
-
-	for (idx = 0; idx < auth_size; ++idx) {
-		if (auths[idx]->type == AST_SIP_AUTH_TYPE_IMS_AKA)
-			break;
-	}
-
-	if (idx == auth_size) {
-		ast_log(LOG_ERROR, "No authentication vector found with type=ims_aka. Please fix config.\n");
-		goto cleanup;
-	}
-
-	auth = auths[idx];
-
-cleanup:
-	ast_sip_cleanup_auths(auths, auth_size);
-	return auth;
-}
-
 static int handle_volte_unauthorized(struct registration_response *response, uint8_t *out_auts)
 {
 	struct ast_sip_transport_state *transport_state = NULL;
@@ -1441,6 +1499,10 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 	if (get_endpoint_transport_transport_state(response->client_state, NULL, NULL, &transport_state))
 		goto out;
 	ao2_lock(transport_state);
+
+	/* Cnonce and nc are generated. */
+	auth->ims_cnonce_len = 0;
+	auth->ims_nc = 0;
 
 	switch (response->client_state->volte_state) {
 	case VOLTE_STATE_SIM_RESPONSE:
@@ -1544,6 +1606,28 @@ out:
 	return ret;
 }
 
+static int store_volte_cnonce_nc(struct registration_response *response, pjsip_tx_data *tdata)
+{
+	struct ast_sip_transport_state *transport_state = NULL;
+	int ret = -1;
+
+	if (get_endpoint_transport_transport_state(response->client_state, NULL, NULL, &transport_state))
+		goto out;
+	ao2_lock(transport_state);
+
+	if (volte_store_cnonce_nc(transport_state, tdata)) {
+		ast_log(LOG_ERROR, "Failed to store authentication data.\n");
+	}
+
+	ret = 0;
+
+out:
+	if (transport_state)
+		ao2_unlock(transport_state);
+	ao2_cleanup(transport_state);
+	return ret;
+}
+
 static int store_volte_p_associated_uri(struct registration_response *response)
 {
 	struct ast_sip_transport_state *transport_state = NULL;
@@ -1603,6 +1687,12 @@ static int handle_registration_response(void *data)
 
 	ast_debug(1, "Processing REGISTER response %d from server '%s' for client '%s'\n",
 			response->code, server_uri, client_uri);
+
+	if ((response->code == 401 || response->code == 407)) {
+		if (response->client_state->challenge)
+			pjsip_rx_data_free_cloned(response->client_state->challenge);
+		pjsip_rx_data_clone(response->rdata, 0, &response->client_state->challenge);
+	}
 
 	if ((response->code == 401 || response->code == 407) && response->client_state->ims_aka) {
 		if (handle_volte_unauthorized(response, auts)) {
@@ -1680,6 +1770,9 @@ static int handle_registration_response(void *data)
 					ast_log(LOG_ERROR, "Failed to add authentication token.\n");
 					goto volte_failed;
 				}
+			}
+			if (response->client_state->volte_state == VOLTE_STATE_RESPONSE) {
+				store_volte_cnonce_nc(response, tdata);
 			}
 			if (!response->client_state->resync_attempted)
 				response->client_state->auth_attempted = 1;
@@ -1881,7 +1974,10 @@ static void sip_outbound_registration_response_cb(struct pjsip_regc_cbparam *par
 		/* old_request steals the reference */
 		response->old_request = client_state->last_tdata;
 	}
-	client_state->last_tdata = NULL;
+
+	/* Also reference last_tdata to old_request, for use during unregister. */
+	client_state->last_tdata = response->old_request;
+	pjsip_tx_data_add_ref(client_state->last_tdata);
 
 	/*
 	 * Transfer response reference to serializer task so the
@@ -1903,6 +1999,11 @@ static void sip_outbound_registration_state_destroy(void *obj)
 		state->registration ? state->registration->server_uri : "",
 		state->registration ? state->registration->client_uri : "");
 	ao2_cleanup(state->registration);
+
+	if (state->client_state || state->client_state->challenge) {
+		pjsip_rx_data_free_cloned(state->client_state->challenge);
+		state->client_state->challenge = NULL;
+	}
 
 	if (!state->client_state) {
 		/* Nothing to do */
@@ -2547,6 +2648,10 @@ static int unregister_task(void *obj)
 		state->registration->server_uri, state->registration->client_uri);
 
 	cancel_registration(state->client_state);
+
+	if (state->client_state->ims_aka) {
+		state->client_state->volte_state = VOLTE_STATE_UNREGISTER;
+	}
 
 	if (pjsip_regc_unregister(client, &tdata) == PJ_SUCCESS
 		&& add_configured_supported_headers(state->client_state, tdata)) {

@@ -317,9 +317,13 @@ static pj_status_t set_outbound_authentication_credentials(pjsip_auth_clt_sess *
 			auth_cred.data_type = PJSIP_CRED_DATA_PLAIN_PASSWD;
 			break;
 		case AST_SIP_AUTH_TYPE_IMS_AKA:
+			/* Values are stored here, they may be changed. */
 			auth_cred.data.ptr = auth->ims_res;
 			auth_cred.data.slen = auth->ims_res_len;
 			auth_cred.data_type = PJSIP_CRED_DATA_PLAIN_PASSWD;
+			auth_cred.cnonce.ptr = auth->ims_cnonce;
+			auth_cred.cnonce.slen = auth->ims_cnonce_len;
+			auth_cred.nc = auth->ims_nc;
 			break;
 		case AST_SIP_AUTH_TYPE_MD5:
 			pj_cstr(&auth_cred.data, auth->md5_creds);
