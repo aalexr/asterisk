@@ -208,7 +208,8 @@ $(RESAMPLE_LIB_FILE): RESAMPLE_OPTS=/resample all
 $(ALL_LIB_FILES): BUILD_DIR=$(dir $(@D))
 $(ALL_LIB_FILES): source/build.mak source/pjlib/include/pj/config_site.h
 	$(ECHO_PREFIX) Compiling $(@F)
-	$(CMD_PREFIX) ( $(MAKE) -C $(BUILD_DIR)build$(if $(RESAMPLE_OPTS),$(RESAMPLE_OPTS), $(@F)) >/dev/null ) $(if $(PJPROJECT_BUNDLED_OOT),2>&1 | ($(GREP) -E -v "^(r - output|ar:)" || : ),$(REALLY_QUIET))
+	$(CMD_PREFIX) ( echo $(MAKE) -C $(BUILD_DIR)build$(if $(RESAMPLE_OPTS),$(RESAMPLE_OPTS), $(@F)) ) $(if $(PJPROJECT_BUNDLED_OOT),2>&1 | ($(GREP) -E -v "^(r - output|ar:)" || : ),$(REALLY_QUIET))
+	$(CMD_PREFIX) ( $(MAKE) -C $(BUILD_DIR)build$(if $(RESAMPLE_OPTS),$(RESAMPLE_OPTS), $(@F)) ) $(if $(PJPROJECT_BUNDLED_OOT),2>&1 | ($(GREP) -E -v "^(r - output|ar:)" || : ),$(REALLY_QUIET))
 
 pjproject.symbols: $(ALL_LIB_FILES)
 	$(ECHO_PREFIX) Generating symbols
