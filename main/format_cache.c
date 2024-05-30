@@ -236,6 +236,11 @@ struct ast_format *ast_format_amr;
 struct ast_format *ast_format_amrwb;
 
 /*!
+ * \brief Built-in cached 3GPP EVS format.
+ */
+struct ast_format *ast_format_evs;
+
+/*!
  * \brief Built-in cached t140 format.
  */
 struct ast_format *ast_format_t140;
@@ -329,6 +334,8 @@ static void format_cache_shutdown(void)
 
 	ao2_replace(ast_format_amr, NULL);
 	ao2_replace(ast_format_amrwb, NULL);
+
+	ao2_replace(ast_format_evs, NULL);
 
 	ao2_replace(ast_format_g723, NULL);
 	ao2_replace(ast_format_ulaw, NULL);
@@ -448,6 +455,8 @@ static void set_cached_format(const char *name, struct ast_format *format)
 		ao2_replace(ast_format_siren14, format);
 	} else if (!strcmp(name, "g719")) {
 		ao2_replace(ast_format_g719, format);
+	} else if (!strcmp(name, "evs")) {
+		ao2_replace(ast_format_evs, format);
 	} else if (!strcmp(name, "opus")) {
 		ao2_replace(ast_format_opus, format);
 	} else if (!strcmp(name, "amr")) {

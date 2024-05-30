@@ -956,6 +956,17 @@ static struct ast_codec amrwb = {
 	.smooth = 0,
 };
 
+
+static struct ast_codec evs = {
+	.name = "evs",
+	.description = "3GPP EVS",
+	.type = AST_MEDIA_TYPE_AUDIO,
+	.sample_rate = 16000,
+	.minimum_ms = 20,
+	.maximum_ms = 300,
+	.default_ms = 20,
+};
+
 #define CODEC_REGISTER_AND_CACHE(codec) \
 	({ \
 		int __res_ ## __LINE__ = 0; \
@@ -987,6 +998,8 @@ static struct ast_codec amrwb = {
 int ast_codec_builtin_init(void)
 {
 	int res = 0;
+
+	res |= CODEC_REGISTER_AND_CACHE(evs);
 
 	res |= CODEC_REGISTER_AND_CACHE(amr);
 	res |= CODEC_REGISTER_AND_CACHE(amrwb);
