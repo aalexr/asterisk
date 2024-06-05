@@ -249,6 +249,9 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 		auth_algo.algo.alg_key_len = 160;
 		break;
 	}
+	ast_debug(1, "xfrm: auth key: 0x%02x%02x%02x%02x\n",
+		  (uint8_t)auth_algo.algo.alg_key[0], (uint8_t)auth_algo.algo.alg_key[1],
+		  (uint8_t)auth_algo.algo.alg_key[2], (uint8_t)auth_algo.algo.alg_key[3]);
 	memset(&ciph_algo, 0, sizeof(ciph_algo));
 	strcpy(ciph_algo.algo.alg_name, g_ipsec_ealg[j].kernel_name);
 	switch (j) {
@@ -416,6 +419,12 @@ static pj_status_t add_securety_client_hdr(pjsip_tx_data *tdata, const struct ip
 	char str[256];
 	int i, j;
 
+	/* remove old header */
+	hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_SECURITY_CLIENT, NULL);
+	if (hdr) {
+		pj_list_erase(hdr);
+	}
+
 	/* Add Security-Client header. */
 	hdr = pjsip_generic_array_hdr_create(tdata->pool, &STR_SECURITY_CLIENT);
 	if (!hdr) {
@@ -542,7 +551,7 @@ pj_status_t volte_reset_transport(struct ast_sip_transport_state *transport_stat
 }
 
 /* Alloc transport. */
-pj_status_t volte_alloc_transport(struct ast_sip_transport_state *transport_state, int port_c, int port_s)
+pj_status_t volte_alloc_transport(struct ast_sip_transport_state *transport_state)
 {
 	pj_status_t status;
 
@@ -557,8 +566,8 @@ pj_status_t volte_alloc_transport(struct ast_sip_transport_state *transport_stat
 	transport_state->volte.remote_addr_s.addr.sa_family = PJ_AF_INET;
 
 	/* Set new local ports */
-	pj_sockaddr_set_port(&transport_state->volte.local_addr_c, port_c);
-	pj_sockaddr_set_port(&transport_state->volte.local_addr_s, port_s);
+	pj_sockaddr_set_port(&transport_state->volte.local_addr_c, transport_state->volte.local_port_c);
+	pj_sockaddr_set_port(&transport_state->volte.local_addr_s, transport_state->volte.local_port_s);
 
 	/* Allocate SPI */
 	status = volte_alloc_spi(transport_state);

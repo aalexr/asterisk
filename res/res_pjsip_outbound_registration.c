@@ -268,6 +268,26 @@
                         </para>
 		</description>
 	</manager>
+	<manager name="PJSIPAccessNetworkInfo" language="en_US">
+		<synopsis>
+			Set or unset P-Access-Network-Info header
+		</synopsis>
+		<syntax />
+		<description>
+			<para>
+                        </para>
+		</description>
+	</manager>
+	<manager name="AuthResponse" language="en_US">
+		<synopsis>
+			Receive authentication response from USIM.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>
+                        </para>
+		</description>
+	</manager>
  ***/
 
 /* forward declarations */
@@ -865,6 +885,7 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 	struct ast_sip_endpoint *endpt = NULL;
 	struct ast_sip_transport *transp = NULL;
 	struct ast_sip_transport_state *transport_state = NULL;
+	struct ast_sip_auth *auth;
 	int ret = -1;
 
 	if (get_endpoint_transport_transport_state(client_state, &endpt, &transp, &transport_state))
@@ -876,12 +897,13 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		ast_log(LOG_ERROR, "No from_domain defined in endpoint config.\n");
 		goto out;
 	}
-	if (!transp->ims_port_c || !transp->ims_port_s) {
-		ast_log(LOG_ERROR, "No ims_port_c or ims_port_s defined in transport config.\n");
+	if (!transp->sec_port_c_from || !transp->sec_port_c_to || !transp->sec_port_s_from || !transp->sec_port_s_to) {
+		ast_log(LOG_ERROR, "No security ports defined in transport config.\n");
 		goto out;
 	}
 
-	if (client_state->volte_state == VOLTE_STATE_REGISTER) {
+	switch (client_state->volte_state) {
+	case VOLTE_STATE_REGISTER:
 		/* Register case. */
 		if (volte_add_sec_agree(tdata)) {
 			ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
@@ -903,7 +925,23 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 			goto out;
 		}
 
-		if (volte_alloc_transport(transport_state, transp->ims_port_c, transp->ims_port_s)) {
+		/* FALL THROUGH */
+	case VOLTE_STATE_RESYNC:
+		/* Cycle ports. */
+		if (transport_state->volte.local_port_c < transp->sec_port_c_from ||
+		    transport_state->volte.local_port_c >= transp->sec_port_c_to) {
+			transport_state->volte.local_port_c = transp->sec_port_c_from;
+		} else {
+			transport_state->volte.local_port_c++;
+		}
+		if (transport_state->volte.local_port_s < transp->sec_port_s_from ||
+		    transport_state->volte.local_port_s >= transp->sec_port_s_to) {
+			transport_state->volte.local_port_s = transp->sec_port_s_from;
+		} else {
+			transport_state->volte.local_port_s++;
+		}
+
+		if (volte_alloc_transport(transport_state)) {
 			ast_log(LOG_ERROR, "Failed to alloc transport.\n");
 			goto out;
 		}
@@ -912,9 +950,9 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 			ast_log(LOG_ERROR, "Failed to add security client header.\n");
 			goto out;
 		}
-	} else {
-		struct ast_sip_auth *auth;
 
+		break;
+	case VOLTE_STATE_UNREGISTER:
 		/* Unregister case. */
 		if (!(auth = volte_get_sip_auth(&client_state->outbound_auths)))
 			goto out;
@@ -956,6 +994,10 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		pjsip_tx_data_dec_ref(*tdata_p);
 		pjsip_tx_data_add_ref(tdata);
 		*tdata_p = tdata;
+
+		break;
+	default:
+		;
 	}
 
 	ret = 0;
@@ -1005,9 +1047,9 @@ static pj_status_t registration_client_send(struct sip_outbound_registration_cli
 	pjsip_regc_set_transport(client_state->client, &selector);
 	ast_sip_tpselector_unref(&selector);
 
-	/* Create initial IMS headers and reset transport. */
+	/* Create / update IMS headers and reset transport. */
 	if (client_state->ims_aka && (client_state->volte_state == VOLTE_STATE_REGISTER ||
-	    client_state->volte_state == VOLTE_STATE_UNREGISTER)) {
+	    client_state->volte_state == VOLTE_STATE_UNREGISTER || client_state->volte_state == VOLTE_STATE_RESYNC)) {
 		if (volte_registration_client(client_state, &tdata)) {
 			pjsip_tx_data_dec_ref(tdata);
 			ao2_ref(client_state, -1);
@@ -1592,7 +1634,7 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 	}
 	if (transport_state->volte.p_access_network_info[0] &&
 	    volte_add_p_access_network_info(response->old_request, transport_state->volte.p_access_network_info)) {
-		ast_log(LOG_ERROR, "Failed to add sec agree header.\n");
+		ast_log(LOG_ERROR, "Failed to P-Access-Network-Info header.\n");
 		goto out;
 	}
 	response->client_state->volte_state = VOLTE_STATE_RESPONSE;

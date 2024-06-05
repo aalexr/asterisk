@@ -117,6 +117,8 @@ static const pj_str_t AST_PJ_STR_EMPTY = { "", 0 };
  * \brief Local ports for client and server to use with IMS
  */
 struct ast_sip_transport_volte {
+	/*! Current local ports used */
+	int local_port_c, local_port_s;
 	/*! Current states for sec-agree */
 	pj_sockaddr local_addr_c, remote_addr_s;
 	pj_sockaddr remote_addr_c, local_addr_s;
@@ -130,13 +132,13 @@ struct ast_sip_transport_volte {
 	char security_server[1024];
 	/*! Transport that was used (for reset) */
 	struct pjsip_transport	*transport;
-	/* Assigned URI */
+	/*! Assigned URI */
 	char p_associated_uri[1024];
-	/* Access Network Info */
+	/*! Access Network Info */
 	char p_access_network_info[1024];
-	/* Authorization header from last REGISTER */
+	/*! Authorization header from last REGISTER */
 	char authorization[1024];
-	/* cnonce + nc from REGISTER */
+	/*! cnonce + nc from REGISTER */
 	char cnonce[256];
 	uint32_t nc;
 };
@@ -330,8 +332,8 @@ struct ast_sip_transport {
 	/*! This is a flow to another target */
 	int flow;
 	/*! Settings for local ports */
-	int ims_port_c, ims_port_s;
-
+	int sec_port_c_from, sec_port_c_to;
+	int sec_port_s_from, sec_port_s_to;
 };
 
 #define SIP_SORCERY_DOMAIN_ALIAS_TYPE "domain_alias"
