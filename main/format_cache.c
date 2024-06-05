@@ -334,9 +334,7 @@ static void format_cache_shutdown(void)
 
 	ao2_replace(ast_format_amr, NULL);
 	ao2_replace(ast_format_amrwb, NULL);
-
 	ao2_replace(ast_format_evs, NULL);
-
 	ao2_replace(ast_format_g723, NULL);
 	ao2_replace(ast_format_ulaw, NULL);
 	ao2_replace(ast_format_alaw, NULL);

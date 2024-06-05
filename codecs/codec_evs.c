@@ -573,52 +573,6 @@ static void evstolin_destroy(struct ast_trans_pvt *pvt)
 	ast_debug(3, "Destroyed decoder (3GPP EVS)\n");
 }
 
-static struct ast_translator evstolin = {
-	.table_cost = AST_TRANS_COST_LY_LL_ORIGSAMP,
-	.name = "evstolin",
-	.src_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.dst_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 8000,
-	},
-	.format = "slin",
-	.newpvt = evstolin_new,
-	.framein = evstolin_framein,
-	.destroy = evstolin_destroy,
-	.sample = evs_sample,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
-
-static struct ast_translator lintoevs = {
-	.table_cost = AST_TRANS_COST_LL_LY_ORIGSAMP,
-	.name = "lintoevs",
-	.src_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 8000,
-	},
-	.dst_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.format = "evs",
-	.newpvt = lintoevs_new,
-	.framein = lintoevs_framein,
-	.frameout = lintoevs_frameout,
-	.destroy = lintoevs_destroy,
-	.sample = slin8_sample,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
 
 static struct ast_translator evstolin16 = {
 	.table_cost = AST_TRANS_COST_LY_LL_ORIGSAMP - 1,
@@ -667,98 +621,6 @@ static struct ast_translator lin16toevs = {
 	.buf_size = BUFFER_SAMPLES,
 };
 
-static struct ast_translator evstolin32 = {
-	.table_cost = AST_TRANS_COST_LY_LL_ORIGSAMP - 2,
-	.name = "evstolin32",
-	.src_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.dst_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 32000,
-	},
-	.format = "slin32",
-	.newpvt = evstolin_new,
-	.framein = evstolin_framein,
-	.destroy = evstolin_destroy,
-	.sample = evs_sample,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
-
-static struct ast_translator lin32toevs = {
-	.table_cost = AST_TRANS_COST_LL_LY_ORIGSAMP - 2,
-	.name = "lin32toevs",
-	.src_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 32000,
-	},
-	.dst_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.format = "evs",
-	.newpvt = lintoevs_new,
-	.framein = lintoevs_framein,
-	.frameout = lintoevs_frameout,
-	.destroy = lintoevs_destroy,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
-
-static struct ast_translator evstolin48 = {
-	.table_cost = AST_TRANS_COST_LY_LL_ORIGSAMP - 4,
-	.name = "evstolin48",
-	.src_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.dst_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 48000,
-	},
-	.format = "slin48",
-	.newpvt = evstolin_new,
-	.framein = evstolin_framein,
-	.destroy = evstolin_destroy,
-	.sample = evs_sample,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
-
-static struct ast_translator lin48toevs = {
-	.table_cost = AST_TRANS_COST_LL_LY_ORIGSAMP - 4,
-	.name = "lin48toevs",
-	.src_codec = {
-		.name = "slin",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 48000,
-	},
-	.dst_codec = {
-		.name = "evs",
-		.type = AST_MEDIA_TYPE_AUDIO,
-		.sample_rate = 16000,
-	},
-	.format = "evs",
-	.newpvt = lintoevs_new,
-	.framein = lintoevs_framein,
-	.frameout = lintoevs_frameout,
-	.destroy = lintoevs_destroy,
-	.desc_size = sizeof(struct evs_coder_pvt),
-	.buffer_samples = BUFFER_SAMPLES / 2,
-	.buf_size = BUFFER_SAMPLES,
-};
-
 static int evs_sample_counter(struct ast_frame *frame)
 {
 	return EVS_SAMPLES; /* ToDo: several frames per RTP payload (ToC) */
@@ -779,14 +641,14 @@ static int unload_module(void)
 		ao2_ref(evs_codec, -1);
 	}
 
-	res = ast_unregister_translator(&evstolin);
-	res |= ast_unregister_translator(&lintoevs);
+	// res = ast_unregister_translator(&evstolin);
+	// res |= ast_unregister_translator(&lintoevs);
 	res |= ast_unregister_translator(&evstolin16);
 	res |= ast_unregister_translator(&lin16toevs);
-	res |= ast_unregister_translator(&evstolin32);
-	res |= ast_unregister_translator(&lin32toevs);
-	res |= ast_unregister_translator(&evstolin48);
-	res |= ast_unregister_translator(&lin48toevs);
+	// res |= ast_unregister_translator(&evstolin32);
+	// res |= ast_unregister_translator(&lin32toevs);
+	// res |= ast_unregister_translator(&evstolin48);
+	// res |= ast_unregister_translator(&lin48toevs);
 
 	return res;
 }
@@ -814,14 +676,14 @@ static int load_module(void)
 	 * is set already, being non-smoothable is the default. */
 	/* evs_codec->smooth = 0; */
 
-	res = ast_register_translator(&evstolin);
-	res |= ast_register_translator(&lintoevs);
+	// res = ast_register_translator(&evstolin);
+	// res |= ast_register_translator(&lintoevs);
 	res |= ast_register_translator(&evstolin16);
 	res |= ast_register_translator(&lin16toevs);
-	res |= ast_register_translator(&evstolin32);
-	res |= ast_register_translator(&lin32toevs);
-	res |= ast_register_translator(&evstolin48);
-	res |= ast_register_translator(&lin48toevs);
+	// res |= ast_register_translator(&evstolin32);
+	// res |= ast_register_translator(&lin32toevs);
+	// res |= ast_register_translator(&evstolin48);
+	// res |= ast_register_translator(&lin48toevs);
 
 	if (res) {
 		unload_module();

@@ -1,3 +1,7 @@
+// /*** MODULEINFO
+// 	<support_level>core</support_level>
+//  ***/
+ 
 #include "asterisk.h"
 
 /* based on res/res_format_attr_silk.c */
@@ -25,12 +29,12 @@ static struct evs_attr default_evs_attr = {
 	.max_red                =  0, /* no redundancy                    */
 	.cmr                    =  0, /* might be in payload              */
 	.cmr_included           =  0, /* CMR not in SDP                   */
-	.br                     =  0, /* inclusion depends                */
-	.br_send                =  0x1ffe, /* all bit-rates               */
-	.br_recv                =  0x1ffe, /* all bit-rates               */
-	.bw                     =  0, /* inclusion depends                */
-	.bw_send                =  0x1e, /* all bandwidths                */
-	.bw_recv                =  0x1e, /* all bandwidths                */
+	.br                     =  1, /* inclusion depends                */
+	.br_send                =  1, /* all bit-rates               */
+	.br_recv                =  1, /* all bit-rates               */
+	.bw                     =  6, /* inclusion depends                */
+	.bw_send                =  6, /* all bandwidths                */
+	.bw_recv                =  6, /* all bandwidths                */
 	.ch_send                =  0, /* mono                             */
 	.ch_recv                =  0, /* mono                             */
 	.ch_aw_send             =  7, /* MAX_RF_FEC_OFFSET; do not change */
@@ -246,8 +250,8 @@ static struct ast_format *evs_parse_sdp_fmtp(const struct ast_format *format, co
 	}
 
 	attr->br = 0;
-	attr->br_recv = 0x1ffe; /* all bit-rates */
-	attr->br_send = 0x1ffe; /* all bit-rates */
+	attr->br_recv = 0x1fff; /* all bit-rates */
+	attr->br_send = 0x1fff; /* all bit-rates */
 	tmp = strstr(attributes, "br=");
 	if (tmp) {
 		if (sscanf(tmp, "br=%4f-%4f", &br1, &br2) > 0) {
@@ -371,7 +375,7 @@ float evs_generate_sdp_fmtp_br(unsigned int br, float *br2)
 	unsigned int end = 12;
 	unsigned int i;
 
-	br = br & 0x1ffe; /* removes the included-in-SDP flag */
+	br = br & 0x1fff; /* removes the included-in-SDP flag */
 
 	for (i = 1; i <= 12; i = i + 1) {
 		if (br & (1 << i)) {
@@ -477,8 +481,8 @@ static void evs_generate_sdp_fmtp(const struct ast_format *format, unsigned int 
 		appended = appended + 1;
 	}
 
-	if ((attr->br_send & 0x1ffe) == (attr->br_recv & 0x1ffe)) {
-		if ((0 != attr->br) || (attr->br_send != 0x1ffe)) {
+	if ((attr->br_send & 0x1fff) == (attr->br_recv & 0x1fff)) {
+		if ((0 != attr->br) || (attr->br_send != 0x1fff)) {
 			float br1, br2;
 
 			if (0 == appended) {
@@ -486,51 +490,48 @@ static void evs_generate_sdp_fmtp(const struct ast_format *format, unsigned int 
 			} else {
 				ast_str_append(str, 0, ";");
 			}
-			br1 = evs_generate_sdp_fmtp_br(attr->br_send, &br2);
-			if (br1 == br2) {
-				ast_str_append(str, 0, "br=%g", br1);
-			} else {
-				ast_str_append(str, 0, "br=%g-%g", br1, br2);
-			}
+			br1 = evs_generate_sdp_fmtp_br(attr->br, &br2);
+			ast_str_append(str, 0, "br=%g", br1);
+
 			appended = appended + 1;
 		}
 	}
 
-	if ((0x01 & attr->br_send) ||
-		(((attr->br_send & 0x1ffe) != (attr->br_recv & 0x1ffe)) && (attr->br_send != 0x1ffe))) {
-		float br1, br2;
+	// if ((0x01 & attr->br_send) ||
+	// 	(((attr->br_send & 0x1fff) != (attr->br_recv & 0x1fff)) && (attr->br_send != 0x1fff))) {
+	// 	float br1, br2;
 
-		if (0 == appended) {
-			ast_str_append(str, 0, "a=fmtp:%d ", payload);
-		} else {
-			ast_str_append(str, 0, ";");
-		}
-		br1 = evs_generate_sdp_fmtp_br(attr->br_send, &br2);
-		if (br1 == br2) {
-			ast_str_append(str, 0, "br-send=%g", br1);
-		} else {
-			ast_str_append(str, 0, "br-send=%g-%g", br1, br2);
-		}
-		appended = appended + 1;
-	}
+	// 	if (0 == appended) {
+	// 		ast_str_append(str, 0, "a=fmtp:%d ", payload);
+	// 	} else {
+	// 		ast_str_append(str, 0, ";");
+	// 	}
+	// 	br1 = evs_generate_sdp_fmtp_br(attr->br_send, &br2);
+	// 	if (br1 == br2) {
+	// 		ast_str_append(str, 0, "br-send=%g", br1);
+	// 	} else {
+	// 		ast_str_append(str, 0, "br-send=%g-%g", br1, br2);
+	// 	}
+	// 	appended = appended + 1;
+	// }
 
-	if ((0x01 & attr->br_recv) ||
-		(((attr->br_recv & 0x1ffe) != (attr->br_send & 0x1ffe)) && (attr->br_recv != 0x1ffe))) {
-		float br1, br2;
+	// if ((0x01 & attr->br_recv) ||
+	// 	(((attr->br_recv & 0x1fff) != (attr->br_send & 0x1fff)) && (attr->br_recv != 0x1fff))) {
+	// 	float br1, br2;
 
-		if (0 == appended) {
-			ast_str_append(str, 0, "a=fmtp:%d ", payload);
-		} else {
-			ast_str_append(str, 0, ";");
-		}
-		br1 = evs_generate_sdp_fmtp_br(attr->br_recv, &br2);
-		if (br1 == br2) {
-			ast_str_append(str, 0, "br-recv=%g", br1);
-		} else {
-			ast_str_append(str, 0, "br-recv=%g-%g", br1, br2);
-		}
-		appended = appended + 1;
-	}
+	// 	if (0 == appended) {
+	// 		ast_str_append(str, 0, "a=fmtp:%d ", payload);
+	// 	} else {
+	// 		ast_str_append(str, 0, ";");
+	// 	}
+	// 	br1 = evs_generate_sdp_fmtp_br(attr->br_recv, &br2);
+	// 	if (br1 == br2) {
+	// 		ast_str_append(str, 0, "br-recv=%g", br1);
+	// 	} else {
+	// 		ast_str_append(str, 0, "br-recv=%g-%g", br1, br2);
+	// 	}
+	// 	appended = appended + 1;
+	// }
 
 	if ((attr->bw_send & 0x1e) == (attr->bw_recv & 0x1e)) {
 		if ((0 != attr->bw) || (attr->bw_send != 0x1e)) {
@@ -539,32 +540,32 @@ static void evs_generate_sdp_fmtp(const struct ast_format *format, unsigned int 
 			} else {
 				ast_str_append(str, 0, ";");
 			}
-			ast_str_append(str, 0, "bw=%s", evs_generate_sdp_fmtp_bw(attr->bw_send));
+			ast_str_append(str, 0, "bw=%s", evs_generate_sdp_fmtp_bw(attr->bw));
 			appended = appended + 1;
 		}
 	}
 
-	if ((0x01 & attr->bw_send) ||
-		(((attr->bw_send & 0x1e) != (attr->bw_recv & 0x1e)) && (attr->bw_send != 0x1e))) {
-		if (0 == appended) {
-			ast_str_append(str, 0, "a=fmtp:%d ", payload);
-		} else {
-			ast_str_append(str, 0, ";");
-		}
-		ast_str_append(str, 0, "bw-send=%s", evs_generate_sdp_fmtp_bw(attr->bw_send));
-		appended = appended + 1;
-	}
+	// if ((0x01 & attr->bw_send) ||
+	// 	(((attr->bw_send & 0x1e) != (attr->bw_recv & 0x1e)) && (attr->bw_send != 0x1e))) {
+	// 	if (0 == appended) {
+	// 		ast_str_append(str, 0, "a=fmtp:%d ", payload);
+	// 	} else {
+	// 		ast_str_append(str, 0, ";");
+	// 	}
+	// 	ast_str_append(str, 0, "bw-send=%s", evs_generate_sdp_fmtp_bw(attr->bw_send));
+	// 	appended = appended + 1;
+	// }
 
-	if ((0x01 & attr->bw_recv) ||
-		(((attr->bw_send & 0x1e) != (attr->bw_recv & 0x1e)) && (attr->bw_recv != 0x1e))) {
-		if (0 == appended) {
-			ast_str_append(str, 0, "a=fmtp:%d ", payload);
-		} else {
-			ast_str_append(str, 0, ";");
-		}
-		ast_str_append(str, 0, "bw-recv=%s", evs_generate_sdp_fmtp_bw(attr->bw_recv));
-		appended = appended + 1;
-	}
+	// if ((0x01 & attr->bw_recv) ||
+	// 	(((attr->bw_send & 0x1e) != (attr->bw_recv & 0x1e)) && (attr->bw_recv != 0x1e))) {
+	// 	if (0 == appended) {
+	// 		ast_str_append(str, 0, "a=fmtp:%d ", payload);
+	// 	} else {
+	// 		ast_str_append(str, 0, ";");
+	// 	}
+	// 	ast_str_append(str, 0, "bw-recv=%s", evs_generate_sdp_fmtp_bw(attr->bw_recv));
+	// 	appended = appended + 1;
+	// }
 
 	if (0 != attr->ch_send) {
 		if (0 == appended) {
@@ -787,7 +788,7 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 	attr_res->br_recv = (attr2->br_recv & attr1->br_recv) |
 	                    (attr1->br_recv & 0x01) |
 	                    (attr2->br_recv & 0x01);
-	if (0 == (attr_res->br_recv & 0x1ffe) || 0 == (attr_res->br_send & 0x1ffe)) {
+	if (0 == (attr_res->br_recv & 0x1fff) || 0 == (attr_res->br_send & 0x1fff)) {
 		ast_log(LOG_WARNING, "no bitrate in common\n");
 		return NULL;
 	}
