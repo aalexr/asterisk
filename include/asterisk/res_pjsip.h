@@ -332,8 +332,8 @@ struct ast_sip_transport {
 	/*! This is a flow to another target */
 	int flow;
 	/*! Settings for local ports */
-	int sec_port_c_from, sec_port_c_to;
-	int sec_port_s_from, sec_port_s_to;
+	int sec_port_c_min, sec_port_c_max;
+	int sec_port_s_min, sec_port_s_max;
 };
 
 #define SIP_SORCERY_DOMAIN_ALIAS_TYPE "domain_alias"
