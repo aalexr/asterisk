@@ -897,7 +897,7 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		ast_log(LOG_ERROR, "No from_domain defined in endpoint config.\n");
 		goto out;
 	}
-	if (!transp->sec_port_c_from || !transp->sec_port_c_to || !transp->sec_port_s_from || !transp->sec_port_s_to) {
+	if (!transp->sec_port_c_min || !transp->sec_port_c_max || !transp->sec_port_s_min || !transp->sec_port_s_max) {
 		ast_log(LOG_ERROR, "No security ports defined in transport config.\n");
 		goto out;
 	}
@@ -928,15 +928,15 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		/* FALL THROUGH */
 	case VOLTE_STATE_RESYNC:
 		/* Cycle ports. */
-		if (transport_state->volte.local_port_c < transp->sec_port_c_from ||
-		    transport_state->volte.local_port_c >= transp->sec_port_c_to) {
-			transport_state->volte.local_port_c = transp->sec_port_c_from;
+		if (transport_state->volte.local_port_c < transp->sec_port_c_min ||
+		    transport_state->volte.local_port_c >= transp->sec_port_c_max) {
+			transport_state->volte.local_port_c = transp->sec_port_c_min;
 		} else {
 			transport_state->volte.local_port_c++;
 		}
-		if (transport_state->volte.local_port_s < transp->sec_port_s_from ||
-		    transport_state->volte.local_port_s >= transp->sec_port_s_to) {
-			transport_state->volte.local_port_s = transp->sec_port_s_from;
+		if (transport_state->volte.local_port_s < transp->sec_port_s_min ||
+		    transport_state->volte.local_port_s >= transp->sec_port_s_max) {
+			transport_state->volte.local_port_s = transp->sec_port_s_min;
 		} else {
 			transport_state->volte.local_port_s++;
 		}
