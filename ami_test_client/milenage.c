@@ -95,8 +95,9 @@ static int aes_128_encrypt_block(const u8 *key, const u8 *plain, u8 *encr)
 	return 0;
 }
 
-#if 0
-void hexdump(int level, const char *file, int line, const char *func, const char *text, const uint8_t *data, int len)
+#define DEBUG
+#ifdef DEBUG
+void hexdump(const char *text, const uint8_t *data, int len)
 {
 	char s[3 * len + 2], *p;
         int f;
@@ -104,7 +105,7 @@ void hexdump(int level, const char *file, int line, const char *func, const char
         for (p = s, f = 0; f < len; f++, p += 3) {
                 sprintf(p, "%02hhX ", (unsigned char)data[f]);
         }
-	ast_log(level, file, line, func, "%s: %s\n", text, s);
+	printf("%s: %s\n", text, s);
 }
 #endif
 
@@ -362,64 +363,63 @@ int milenage_check(const u8 *opc, const u8 *k, const u8 *sqn, const u8 *_rand,
 	u8 mac_a[8], ak[6], rx_sqn[6];
 	const u8 *amf;
 
-#ifdef hexdump
-	hexdump(LOG_DEBUG, "Milenage: OPC", opc, 16);
-	hexdump(LOG_DEBUG, "Milenage: K", k, 16);
-	hexdump(LOG_DEBUG, "Milenage: AUTN", autn, 16);
-	hexdump(LOG_DEBUG, "Milenage: RAND", _rand, 16);
+#ifdef DEBUG
+	hexdump("Milenage: OPC", opc, 16);
+	hexdump("Milenage: K", k, 16);
+	hexdump("Milenage: AUTN", autn, 16);
+	hexdump("Milenage: RAND", _rand, 16);
 #endif
 
 	if (milenage_f2345(opc, k, _rand, res, ck, ik, ak, NULL))
 		return -1;
 
 	*res_len = 8;
-#ifdef hexdump
-	hexdump(LOG_DEBUG, "Milenage: RES", res, *res_len);
-	hexdump(LOG_DEBUG, "Milenage: CK", ck, 16);
-	hexdump(LOG_DEBUG, "Milenage: IK", ik, 16);
-	hexdump(LOG_DEBUG, "Milenage: AK", ak, 6);
+#ifdef DEBUG
+	hexdump("Milenage: RES", res, *res_len);
+	hexdump("Milenage: CK", ck, 16);
+	hexdump("Milenage: IK", ik, 16);
+	hexdump("Milenage: AK", ak, 6);
 #endif
 
 	/* AUTN = (SQN ^ AK) || AMF || MAC */
 	for (i = 0; i < 6; i++)
 		rx_sqn[i] = autn[i] ^ ak[i];
-#ifdef hexdump
-	hexdump(LOG_DEBUG, "Milenage: RX SQN", rx_sqn, 6);
-	hexdump(LOG_DEBUG, "Milenage: SQN", sqn, 6);
+#ifdef DEBUG
+	hexdump("Milenage: RX SQN", rx_sqn, 6);
+	hexdump("Milenage: SQN", sqn, 6);
 #endif
 
 	if (memcmp(rx_sqn, sqn, 6) <= 0) {
 		u8 auts_amf[2] = { 0x00, 0x00 }; /* TS 33.102 v7.0.0, 6.3.3 */
 		if (milenage_f2345(opc, k, _rand, NULL, NULL, NULL, NULL, ak))
 			return -1;
-#ifdef hexdump
-		hexdump(LOG_DEBUG, "Milenage: AK*", ak, 6);
+#ifdef DEBUG
+		hexdump("Milenage: AK*", ak, 6);
 #endif
 		for (i = 0; i < 6; i++)
 			auts[i] = sqn[i] ^ ak[i];
 		if (milenage_f1(opc, k, _rand, sqn, auts_amf, NULL, auts + 6))
 			return -1;
-#ifdef hexdump
-		hexdump(LOG_DEBUG, "Milenage: AUTS", auts, 14);
+#ifdef DEBUG
+		hexdump("Milenage: AUTS", auts, 14);
 #endif
 		return -2;
 	}
 
 	amf = autn + 6;
-#ifdef hexdump
-	hexdump(LOG_DEBUG, "Milenage: AMF", amf, 2);
+#ifdef DEBUG
+	hexdump("Milenage: AMF", amf, 2);
 #endif
 	if (milenage_f1(opc, k, _rand, rx_sqn, amf, mac_a, NULL))
 		return -1;
 
-#ifdef hexdump
-	hexdump(LOG_DEBUG, "Milenage: MAC_A", mac_a, 8);
+#ifdef DEBUG
+	hexdump("Milenage: MAC_A", mac_a, 8);
 #endif
 
 	if (memcmp(mac_a, autn + 8, 8) != 0) {
-#ifdef hexdump
-		ast_log(LOG_DEBUG, "Milenage: MAC mismatch");
-		hexdump(LOG_DEBUG, "Milenage: Received MAC_A",
+#ifdef DEBUG
+		hexdump("Milenage: MAC mismatch, Received MAC_A",
 			    autn + 8, 8);
 #endif
 		return -1;
