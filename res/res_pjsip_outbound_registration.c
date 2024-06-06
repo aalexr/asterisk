@@ -814,10 +814,17 @@ static pj_status_t get_endpoint_transport_transport_state(struct sip_outbound_re
 {
 	struct sip_outbound_registration *reg = NULL;
 
+	if (endpt)
+		*endpt = NULL;
+	if (transp)
+		*transp = NULL;
+	if (transport_state)
+		*transport_state = NULL;
+
 	reg = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "registration",
 					 client_state->registration_name);
 	if (!reg) {
-		ast_log(LOG_ERROR, "Internal error\n");
+		ast_debug(1, "Registration %s already gone.\n", client_state->registration_name);
 		goto error;
 	}
 	if (endpt && (!reg->endpoint ||
@@ -843,9 +850,12 @@ static pj_status_t get_endpoint_transport_transport_state(struct sip_outbound_re
 
 error:
 	ao2_cleanup(reg);
-	ao2_cleanup(*endpt);
-	ao2_cleanup(*transp);
-	ao2_cleanup(*transport_state);
+	if (endpt)
+		ao2_cleanup(*endpt);
+	if (transp)
+		ao2_cleanup(*transp);
+	if (transport_state)
+		ao2_cleanup(*transport_state);
 	return -1;
 }
 
