@@ -2886,6 +2886,11 @@ static pj_status_t get_transport_transport_state(struct ast_sip_endpoint *endpoi
 						 struct ast_sip_transport **transp,
 						 struct ast_sip_transport_state **transport_state)
 {
+	if (transp)
+		*transp = NULL;
+	if (transport_state)
+		*transport_state = NULL;
+
 	if (transp && (!endpoint->transport ||
 	    (!(*transp = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "transport", endpoint->transport))))) {
 		ast_log(LOG_ERROR, "No transport config '%s'\n", endpoint->transport);
@@ -2901,8 +2906,10 @@ static pj_status_t get_transport_transport_state(struct ast_sip_endpoint *endpoi
 	return 0;
 
 error:
-	ao2_cleanup(*transp);
-	ao2_cleanup(*transport_state);
+	if (transp)
+		ao2_cleanup(*transp);
+	if (transport_state)
+		ao2_cleanup(*transport_state);
 	return -1;
 }
 
