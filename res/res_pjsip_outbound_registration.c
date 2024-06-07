@@ -2405,6 +2405,8 @@ static int sip_outbound_registration_regc_alloc(void *data)
 	pjsip_uri *uri;
 	pj_str_t server_uri, client_uri, contact_uri;
 	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
+	char uuid_buf[AST_UUID_STR_LEN];
+	const char *contact_user;
 
 	pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "URI Validation", 256, 256);
 	if (!pool) {
@@ -2469,8 +2471,15 @@ static int sip_outbound_registration_regc_alloc(void *data)
 
 	pj_cstr(&server_uri, registration->server_uri);
 
+	if (registration->ims_aka) {
+		ast_pbx_uuid_get(uuid_buf, sizeof(uuid_buf));
+		contact_user = uuid_buf;
+	} else {
+		contact_user = S_OR(registration->contact_user, "s");
+	}
+
 	if (sip_dialog_create_contact(pjsip_regc_get_pool(state->client_state->client),
-		&contact_uri, S_OR(registration->contact_user, "s"), &server_uri, &selector,
+		&contact_uri, contact_user, &server_uri, &selector,
 		state->client_state->line, registration->contact_header_params)) {
 		ast_sip_tpselector_unref(&selector);
 		return -1;
