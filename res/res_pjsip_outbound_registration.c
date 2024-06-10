@@ -2890,9 +2890,11 @@ static char *cli_register(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 	/* We need to serialize the unregister and register so they need
 	 * to be queued as separate tasks.
 	 */
-	if (queue_unregister(state)) {
-		ast_cli(a->fd, "Failed to queue unregistration\n");
-	} else if (queue_register(state)) {
+#warning hacking
+	if (queue_register(state)) {
+//	if (queue_unregister(state)) {
+//		ast_cli(a->fd, "Failed to queue unregistration\n");
+//	} else if (queue_register(state)) {
 		ast_cli(a->fd, "Failed to queue registration\n");
 	}
 
