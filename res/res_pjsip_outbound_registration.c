@@ -938,18 +938,8 @@ static pj_status_t volte_registration_client(struct sip_outbound_registration_cl
 		/* FALL THROUGH */
 	case VOLTE_STATE_RESYNC:
 		/* Cycle ports. */
-		if (transport_state->volte.local_port_c < transp->sec_port_c_min ||
-		    transport_state->volte.local_port_c >= transp->sec_port_c_max) {
-			transport_state->volte.local_port_c = transp->sec_port_c_min;
-		} else {
-			transport_state->volte.local_port_c++;
-		}
-		if (transport_state->volte.local_port_s < transp->sec_port_s_min ||
-		    transport_state->volte.local_port_s >= transp->sec_port_s_max) {
-			transport_state->volte.local_port_s = transp->sec_port_s_min;
-		} else {
-			transport_state->volte.local_port_s++;
-		}
+		ast_random() % (transp->sec_port_c_max - transp->sec_port_c_min + 1) + transp->sec_port_c_min;
+		ast_random() % (transp->sec_port_s_max - transp->sec_port_s_min + 1) + transp->sec_port_s_min;
 
 		if (volte_alloc_transport(transport_state)) {
 			ast_log(LOG_ERROR, "Failed to alloc transport.\n");
