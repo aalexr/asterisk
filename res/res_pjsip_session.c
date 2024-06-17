@@ -4440,6 +4440,10 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 			ast_log(LOG_ERROR, "Failed to add Security-Verify header.\n");
 		}
 
+		if (volte_add_precondition(tdata, PJ_TRUE)) {
+			ast_log(LOG_ERROR, "Failed to add precondition header.\n");
+		}
+
 		ao2_unlock(transport_state);
 		ao2_cleanup(transport_state);
 	}
@@ -4744,6 +4748,14 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 		if (transport_state->volte.p_access_network_info[0] &&
 		    volte_add_p_access_network_info(tdata, transport_state->volte.p_access_network_info)) {
 			ast_log(LOG_ERROR, "Failed to add P-Access-Network-info header.\n");
+		}
+
+		if (status.code == 183 && volte_add_precondition(tdata, PJ_FALSE)) {
+			ast_log(LOG_ERROR, "Failed to add precondition header.\n");
+		}
+
+		if (status.code == 183 && volte_add_recvonly(tdata)) {
+			ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 		}
 
 		ao2_unlock(transport_state);
