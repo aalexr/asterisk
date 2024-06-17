@@ -28,6 +28,10 @@ const pj_str_t STR_REQUIRE = { "Require", 7 };
 const pj_str_t STR_PROXY_REQUIRE = { "Proxy-Require", 13 };
 const pj_str_t STR_SEC_AGREE = { "sec-agree", 9 };
 const pj_str_t STR_P_ACCESS_NETWORK_INFO = { "P-Access-Network-Info", 21 };
+const pj_str_t STR_SUPPORTED = { "Supported", 9 };
+const pj_str_t STR_PRECONDITION = { "precondition", 12 };
+const pj_str_t STR_P_EARLY_MEDIA = { "P-Early-Media", 13 };
+const pj_str_t STR_RECVONLY = { "recvonly", 8 };
 
 /* Create string header and add given value. */
 static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
@@ -115,6 +119,53 @@ pj_status_t volte_add_p_access_network_info(pjsip_tx_data *tdata, char *info)
 
 	/* "P-Access-Network-Info" */
 	status = add_value_string_hdr(tdata, &STR_P_ACCESS_NETWORK_INFO, &info_str);
+	if (status)
+		return status;
+
+	return PJ_SUCCESS;
+}
+
+pj_status_t volte_add_precondition(pjsip_tx_data *tdata, pj_bool_t request)
+{
+	pj_bool_t created = PJ_FALSE;
+
+	if (request) {
+		/* "Supported: precondition" */
+		pjsip_supported_hdr *hdr;
+		hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_SUPPORTED, NULL);
+		if (!hdr) {
+			hdr = pjsip_supported_hdr_create(tdata->pool);
+			created = PJ_TRUE;
+		}
+		if (hdr) {
+			hdr->values[hdr->count++] = STR_PRECONDITION;
+		}
+		if (created)
+			pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
+	} else {
+		/* "Require: precondition" */
+		pjsip_require_hdr *hdr;
+		hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_REQUIRE, NULL);
+		if (!hdr) {
+			hdr = pjsip_require_hdr_create(tdata->pool);
+			created = PJ_TRUE;
+		}
+		if (hdr) {
+			hdr->values[hdr->count++] = STR_PRECONDITION;
+		}
+		if (created)
+			pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
+	}
+
+	return PJ_SUCCESS;
+}
+
+pj_status_t volte_add_recvonly(pjsip_tx_data *tdata)
+{
+	pj_status_t status;
+
+	/* "P-Access-Network-Info" */
+	status = add_value_string_hdr(tdata, &STR_P_EARLY_MEDIA, &STR_RECVONLY);
 	if (status)
 		return status;
 
