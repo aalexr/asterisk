@@ -2306,7 +2306,8 @@ void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c_dst, st
 	}
 
 
-	ast_rtp_engine_load_format(ast_format_evs);
+	// ast_rtp_engine_load_format(ast_format_evs);
+	// ast_rtp_engine_load_format(ast_format_vevs);
 	/* If any sort of bridge is forbidden just completely bail out and go back to generic bridging */
 	if (audio_glue_dst_res != AST_RTP_GLUE_RESULT_REMOTE || audio_glue_src_res != AST_RTP_GLUE_RESULT_REMOTE) {
 		goto done;
