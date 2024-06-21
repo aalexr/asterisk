@@ -509,6 +509,8 @@ struct sip_outbound_registration_state {
 	struct sip_outbound_registration_client_state *client_state;
 };
 
+#define SIM_TIMEOUT 3
+
 /*! \brief Structure for registration response */
 struct registration_response {
 	/*! \brief Response code for the registration attempt */
@@ -1590,7 +1592,7 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 		}
 
 		if (auth->usim_ami) {
-			pj_time_val delay = { .sec = 1, };
+			pj_time_val delay = { .sec = SIM_TIMEOUT, };
 			ast_debug(1, "Asking SIM card via AMI to authenticate with the callenge.\n");
 			volte_send_authrequest(response->client_state->registration_name, &algo, rand, autn);
 			response->client_state->volte_response = response;
