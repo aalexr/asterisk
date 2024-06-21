@@ -4,6 +4,7 @@
 #include <ev.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "ami.h"
 #include "debug.h"
@@ -86,6 +87,7 @@ void utproba () {
 }
 
 int do_register = 0;
+char function[128];
 
 void event_response (ami_event_t *event) {
 	const char *message_str = ami_getvar(event, "Message");
@@ -94,12 +96,20 @@ void event_response (ami_event_t *event) {
 }
 
 void event_fullybooted (ami_event_t *event) {
-    printf("*** Fully booted ***\n");
-    if (do_register)
-	    return;
-    do_register = 1;
-   ami_action(ami, event_response, NULL, "Action: PJSIPRegister\nRegistration: volte_ims");
-   ami_action(ami, event_response, NULL, "Action: PJSIPAccessNetworkInfo\nRegistration: volte_ims\nInfo: hello");
+	printf("*** Fully booted ***\n");
+	if (!strcasecmp(function, "register")) {
+		if (do_register)
+			return;
+		do_register = 1;
+		ami_action(ami, event_response, NULL, "Action: PJSIPRegister\nRegistration: volte_ims");
+		ami_action(ami, event_response, NULL, "Action: PJSIPAccessNetworkInfo\nRegistration: volte_ims\nInfo: hello");
+	}
+	if (!strcasecmp(function, "precondition")) {
+		if (do_register)
+			return;
+		sleep(1);
+		ami_action(ami, event_response, NULL, "Action: DedicatedBearerStatus\nStatus: Up");
+	}
 }
 
 int hex_to_octet_string(const char *name, const char *input, uint8_t *output, size_t output_size)
@@ -258,12 +268,14 @@ int main (int argc, char *argv[]) {
 
     char host[128];
 
-    if (argc < 2) {
-        //~ printf("usage: %s <host>\n", argv[0]);
-        printf("Default host used!\n");
+    if (argc <= 2) {
+        printf("usage: %s <function> <host>\n", argv[0]);
+        printf("Default function/host used!\n");
+        strcpy(function, "register");
         strcpy(host, "127.0.0.1");
     } else {
-        strcpy(host, argv[1]);
+        strcpy(function, argv[1]);
+        strcpy(host, argv[2]);
     }
 
     printf("Connecting to %s ...\n", host);
