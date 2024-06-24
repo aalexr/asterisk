@@ -42,7 +42,7 @@
  ***/
 
 static char *app = "WaitForPrecondition";
-pj_bool_t ast_get_precondition_state(void);
+pj_bool_t ast_get_precondition_complete(void);
 
 enum mt_precodition_state {
 	MT_PRECONDITION_STATE_NOT_OCCURED,
@@ -83,7 +83,7 @@ static int waituntilprecondition_exec(struct ast_channel *chan, const char* data
 	}
 
 	do {
-		precondition_status = ast_get_precondition_state();
+		precondition_status = ast_get_precondition_complete();
 		if (precondition_status) {
 			ast_log(LOG_NOTICE, "precondition status: success %d", precondition_status);
 			pbx_builtin_setvar_helper(chan, "PRECONDITION_STATUS", "SUCCESS");
