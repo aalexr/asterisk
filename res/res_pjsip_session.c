@@ -4576,6 +4576,9 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 			/* 3GPP TS 24.229 5.1.3.1: Add "Accept: application/sdp,application/3gpp-ims+xml" */
 			volte_add_accept(tdata, PJ_TRUE);
 
+			/* P-Preferred-Service: GSMA FCM.01 3.2.3.3 */
+			volte_add_p_preferred_service(tdata, "urn:urn-7:3gpp-service.ims.icsi.mmtel");
+
 			/* Add Supported: precondition */
 			if (volte_add_precondition(tdata, PJ_TRUE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");

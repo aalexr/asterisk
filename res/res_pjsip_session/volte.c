@@ -31,6 +31,7 @@ const pj_str_t STR_MIME_APP_SDP = DEF_STR("application/sdp");
 const pj_str_t STR_MIME_APP_3GPP_IMS_XML = DEF_STR("application/3gpp-ims+xml");
 const pj_str_t STR_SECURITY_VERIFY = { "Security-Verify", 15 };
 const pj_str_t STR_REQUIRE = { "Require", 7 };
+const pj_str_t STR_P_PREFERRED_SERVICE = DEF_STR("P-Preferred-Service");
 const pj_str_t STR_PROXY_REQUIRE = { "Proxy-Require", 13 };
 const pj_str_t STR_SEC_AGREE = { "sec-agree", 9 };
 const pj_str_t STR_P_ACCESS_NETWORK_INFO = { "P-Access-Network-Info", 21 };
@@ -132,6 +133,21 @@ pj_status_t volte_add_p_access_network_info(pjsip_tx_data *tdata, char *info)
 
 	/* "P-Access-Network-Info" */
 	status = add_value_string_hdr(tdata, &STR_P_ACCESS_NETWORK_INFO, &info_str);
+	if (status)
+		return status;
+
+	return PJ_SUCCESS;
+}
+
+/* Add P-Preferred-Service to header. */
+pj_status_t volte_add_p_preferred_service(pjsip_tx_data *tdata, char *info)
+{
+	pj_status_t status;
+
+	const pj_str_t info_str = { info, strlen(info) };
+
+	/* "P-Access-Network-Info" */
+	status = add_value_string_hdr(tdata, &STR_P_PREFERRED_SERVICE, &info_str);
 	if (status)
 		return status;
 
