@@ -4573,6 +4573,9 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 		}
 
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "INVITE")) {
+			/* 3GPP TS 24.229 5.1.3.1: Add "Accept: application/sdp,application/3gpp-ims+xml" */
+			volte_add_accept(tdata, PJ_TRUE);
+
 			/* Add Supported: precondition */
 			if (volte_add_precondition(tdata, PJ_TRUE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");

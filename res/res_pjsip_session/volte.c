@@ -24,6 +24,11 @@
 
 #include "volte.h"
 
+#define DEF_STR(str) { str, sizeof(str) - 1 }
+
+const pj_str_t STR_ACCEPT = DEF_STR("Accept");
+const pj_str_t STR_MIME_APP_SDP = DEF_STR("application/sdp");
+const pj_str_t STR_MIME_APP_3GPP_IMS_XML = DEF_STR("application/3gpp-ims+xml");
 const pj_str_t STR_SECURITY_VERIFY = { "Security-Verify", 15 };
 const pj_str_t STR_REQUIRE = { "Require", 7 };
 const pj_str_t STR_PROXY_REQUIRE = { "Proxy-Require", 13 };
@@ -49,6 +54,25 @@ static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *na
 
 	/* Append header */
 	pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr *)hdr);
+
+	return PJ_SUCCESS;
+}
+
+/* 3GPP TS 24.229 5.1.3.1: Add "Accept: application/sdp,application/3gpp-ims+xml" to header. */
+pj_status_t volte_add_accept(pjsip_tx_data *tdata)
+{
+	pj_bool_t created = PJ_FALSE;
+	pjsip_require_hdr *hdr;
+
+	hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_ACCEPT, NULL);
+	if (!hdr) {
+		hdr = pjsip_accept_hdr_create(tdata->pool);
+		if (!hdr)
+			return PJ_ENOMEM;
+	}
+	hdr->values[hdr->count++] = STR_MIME_APP_SDP;
+	hdr->values[hdr->count++] = STR_MIME_APP_3GPP_IMS_XML;
+	pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
 
 	return PJ_SUCCESS;
 }
