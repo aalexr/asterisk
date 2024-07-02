@@ -4582,7 +4582,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 				ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 			}
 			/* Add parameters to Contact header. */
-			volte_add_contact_params(tdata, PJ_FALSE);
+			volte_add_contact_params(tdata, PJ_TRUE);
 		}
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "UPDATE")) {
 			/* Add Require: precondition */
@@ -4590,7 +4590,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
 			/* Add parameters to Contact header. */
-			volte_add_contact_params(tdata, PJ_TRUE);
+			volte_add_contact_params(tdata, PJ_FALSE);
 		}
 
 		ao2_unlock(transport_state);
@@ -4974,6 +4974,11 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 			ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 		}
 
+		if (status.code == 183) {
+			/* Add parameters to Contact header. */
+			volte_add_contact_params(tdata, PJ_FALSE);
+		}
+
 		ao2_unlock(transport_state);
 		ao2_cleanup(transport_state);
 		if (session->precondition_state == AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE && status.code == 200 &&
@@ -4985,6 +4990,8 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 			if (session == precondition_session)
 				precondition_session = NULL;
 			precondition_unlock();
+			/* Add parameters to Contact header. */
+			volte_add_contact_params(tdata, PJ_FALSE);
 		}
 	}
 

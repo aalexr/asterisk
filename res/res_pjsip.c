@@ -971,8 +971,6 @@ pjsip_dialog *ast_sip_create_dialog_uac(const struct ast_sip_endpoint *endpoint,
 	const char *outbound_proxy = endpoint->outbound_proxy;
 	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
 	static const pj_str_t HCONTACT = { "Contact", 7 };
-	char uuid_buf[AST_UUID_STR_LEN];
-	const char *fromuser;
 
 	if (!ast_begins_with(uri, "<")) {
 		snprintf(enclosed_uri, sizeof(enclosed_uri), "<%s>", uri);
@@ -1004,14 +1002,7 @@ pjsip_dialog *ast_sip_create_dialog_uac(const struct ast_sip_endpoint *endpoint,
 
 	ast_sip_dlg_set_transport(endpoint, dlg, &selector);
 
-	if (endpoint->ims_aka) {
-		ast_pbx_uuid_get(uuid_buf, sizeof(uuid_buf));
-		fromuser = uuid_buf;
-	} else {
-		fromuser = endpoint->fromuser;
-	}
-
-	if (sip_dialog_create_from(dlg->pool, &local_uri, fromuser, endpoint->fromdomain, &remote_uri, &selector)) {
+	if (sip_dialog_create_from(dlg->pool, &local_uri, endpoint->fromuser, endpoint->fromdomain, &remote_uri, &selector)) {
 		dlg->sess_count--;
 		pjsip_dlg_terminate(dlg);
 		ast_sip_tpselector_unref(&selector);

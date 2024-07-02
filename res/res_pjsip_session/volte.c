@@ -195,7 +195,7 @@ static const char *volte_invite_contact_params[] = {
 	NULL
 };
 
-static const char *volte_update_contact_params[] = {
+static const char *volte_other_contact_params[] = {
 	"+g.3gpp.icsi-ref",
 	"\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
 	"audio",
@@ -203,12 +203,14 @@ static const char *volte_update_contact_params[] = {
 	NULL
 };
 
-void volte_add_contact_params(pjsip_tx_data *tdata, pj_bool_t update)
+void volte_add_contact_params(pjsip_tx_data *tdata, pj_bool_t invite)
 {
 	pjsip_contact_hdr *contact;
+	pjsip_sip_uri *uri;
 	const char **params;
 	pjsip_param *p;
 	pj_str_t name, value;
+	char uuid_buf[AST_UUID_STR_LEN];
 
 	contact = pjsip_msg_find_hdr(tdata->msg, PJSIP_H_CONTACT, NULL);
 	if (!contact) {
@@ -216,10 +218,16 @@ void volte_add_contact_params(pjsip_tx_data *tdata, pj_bool_t update)
 		return;
 	}
 
-	if (!update)
+	uri = pjsip_uri_get_uri(contact->uri);
+	if (uri) {
+		ast_pbx_uuid_get(uuid_buf, sizeof(uuid_buf));
+		pj_strdup2(tdata->pool, &uri->user, uuid_buf);
+	}
+
+	if (invite)
 		params = volte_invite_contact_params;
 	else
-		params = volte_update_contact_params;
+		params = volte_other_contact_params;
 
 	while (*params) {
 		p = PJ_POOL_ALLOC_T(tdata->pool, pjsip_param);
