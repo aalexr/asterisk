@@ -2470,7 +2470,7 @@ static int sip_outbound_registration_regc_alloc(void *data)
 		ast_pbx_uuid_get(uuid_buf, sizeof(uuid_buf));
 		contact_user = uuid_buf;
 		contact_header_params = "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";"
-					"+g.3gpp.smsip;audio;+sip.instance=\"<urn:gsma:imei:35876110-027790-0>\"";
+					"audio;+sip.instance=\"<urn:gsma:imei:35876110-027790-0>\"";
 	} else {
 		contact_user = S_OR(registration->contact_user, "s");
 		contact_header_params = registration->contact_header_params;
