@@ -1020,3 +1020,21 @@ pj_status_t volte_expires_0(pjsip_tx_data *tdata)
 
 	return PJ_SUCCESS;
 }
+
+const char *volte_add_contact_params(const char *imei)
+{
+	static char contact[256], imei_str[64];
+
+	if (!imei || !imei[0])
+		imei = "000000000000000";
+
+	if (strlen(imei) == 15) {
+		sprintf(imei_str, "%.8s-%.6s-%s", imei, imei + 8, imei + 14);
+		imei = imei_str;
+	}
+
+	sprintf(contact, "+g.3gpp.icsi-ref=\"urn%%3Aurn-7%%3A3gpp-service.ims.icsi.mmtel\";"
+			 "audio;+sip.instance=\"<urn:gsma:imei:%s>\"", imei);
+
+	return contact;
+}

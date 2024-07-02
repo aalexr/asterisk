@@ -217,6 +217,9 @@
 				<configOption name="ims_aka">
 					<synopsis>Perform Voice over LTE SIP registration process.</synopsis>
 				</configOption>
+				<configOption name="imsi">
+					<synopsis>Set IMSI in contact header for VoLTE calls.</synopsis>
+				</configOption>
 			</configObject>
 		</configFile>
 	</configInfo>
@@ -371,6 +374,8 @@ struct sip_outbound_registration {
 		AST_STRING_FIELD(outbound_proxy);
 		/*! \brief Endpoint to use for related incoming calls */
 		AST_STRING_FIELD(endpoint);
+		/*! \brief IMEI for VoLTE calls */
+		AST_STRING_FIELD(imei);
 	);
 	/*! \brief Requested expiration time */
 	unsigned int expiration;
@@ -2469,8 +2474,7 @@ static int sip_outbound_registration_regc_alloc(void *data)
 	if (registration->ims_aka) {
 		ast_pbx_uuid_get(uuid_buf, sizeof(uuid_buf));
 		contact_user = uuid_buf;
-		contact_header_params = "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";"
-					"+g.3gpp.smsip;audio;+sip.instance=\"<urn:gsma:imei:35876110-027790-0>\"";
+		contact_header_params = volte_add_contact_params(registration->imei);
 	} else {
 		contact_user = S_OR(registration->contact_user, "s");
 		contact_header_params = registration->contact_header_params;
@@ -3543,6 +3547,7 @@ static int load_module(void)
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "endpoint", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct sip_outbound_registration, endpoint));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "manual_register", "no", OPT_BOOL_T, 1, FLDSET(struct sip_outbound_registration, manual_register));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "ims_aka", "no", OPT_BOOL_T, 1, FLDSET(struct sip_outbound_registration, ims_aka));
+	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "imei", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct sip_outbound_registration, imei));
 
 	/*
 	 * Register sorcery observers.
