@@ -4581,12 +4581,16 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 			if (volte_add_p_early_media_supported(tdata)) {
 				ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 			}
+			/* Add parameters to Contact header. */
+			volte_add_contact_params(tdata, PJ_FALSE);
 		}
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "UPDATE")) {
 			/* Add Require: precondition */
 			if (volte_add_precondition(tdata, PJ_FALSE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
+			/* Add parameters to Contact header. */
+			volte_add_contact_params(tdata, PJ_TRUE);
 		}
 
 		ao2_unlock(transport_state);

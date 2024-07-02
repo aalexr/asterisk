@@ -53,35 +53,6 @@ static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *na
 	return PJ_SUCCESS;
 }
 
-/* Add a value to an array header. If the header does not exist, it is created. */
-static pj_status_t add_value_array_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
-{
-	pjsip_generic_array_hdr *hdr;
-	pj_bool_t created = PJ_FALSE;
-
-	/* Create header, if not yet created. */
-	hdr = pjsip_msg_find_hdr_by_name(tdata->msg, name, NULL);
-	if (!hdr) {
-		hdr = pjsip_generic_array_hdr_create(tdata->pool, name);
-		created = PJ_TRUE;
-	}
-	if (!hdr) {
-		ast_log(LOG_ERROR, "Failed to create array header.");
-		return -ENOMEM;
-	}
-	if (hdr->count == PJSIP_GENERIC_ARRAY_MAX_COUNT) {
-		ast_log(LOG_ERROR, "Too many evalue in array, skipping %s.", value->ptr);
-		return -E2BIG;
-	}
-	pj_strdup(tdata->pool, &hdr->values[hdr->count++], value);
-
-	/* Append header, if created. */
-	if (created)
-		pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr *)hdr);
-
-	return PJ_SUCCESS;
-}
-
 pj_status_t volte_add_security_verify(struct ast_sip_transport_state *transport_state, pjsip_tx_data *tdata)
 {
 	const pj_str_t security = { transport_state->volte.security_server,
@@ -98,12 +69,28 @@ pj_status_t volte_add_security_verify(struct ast_sip_transport_state *transport_
 /* Add Sec-Agree to header. */
 pj_status_t volte_add_sec_agree(pjsip_tx_data *tdata)
 {
+	pj_bool_t created = PJ_FALSE;
+	pjsip_require_hdr *hdr;
 	pj_status_t status;
 
 	/* "Require: sec-agree" */
-	status = add_value_array_hdr(tdata, &STR_REQUIRE, &STR_SEC_AGREE);
+	status = PJ_SUCCESS;
+	hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_REQUIRE, NULL);
+	if (!hdr) {
+		hdr = pjsip_require_hdr_create(tdata->pool);
+		if (hdr)
+			created = PJ_TRUE;
+		else
+			status = PJ_ENOMEM;
+	}
+	if (hdr) {
+		hdr->values[hdr->count++] = STR_SEC_AGREE;
+	}
+	if (created)
+		pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
 	if (status)
 		return status;
+
 	/* "Proxy-Require: sec-agree" */
 	status = add_value_string_hdr(tdata, &STR_PROXY_REQUIRE, &STR_SEC_AGREE);
 	if (status)
@@ -193,6 +180,60 @@ pj_status_t volte_add_p_early_media_supported(pjsip_tx_data *tdata)
 		return status;
 
 	return PJ_SUCCESS;
+}
+
+static const char *volte_invite_contact_params[] = {
+	"+g.3gpp.icsi-ref",
+	"\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+	"audio",
+	"",
+	"+g.3gpp.mid-call",
+	"",
+	"+g.3gpp.srvcc-alerting",
+	"",
+	"+g.3gpp.ps2cs-srvcc-orig-pre-alerting",
+	"",
+	NULL
+};
+
+static const char *volte_update_contact_params[] = {
+	"+g.3gpp.icsi-ref",
+	"\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+	"audio",
+	"",
+	NULL
+};
+
+void volte_add_contact_params(pjsip_tx_data *tdata, pj_bool_t update)
+{
+	pjsip_contact_hdr *contact;
+	const char **params;
+	pjsip_param *p;
+	pj_str_t name, value;
+
+	contact = pjsip_msg_find_hdr(tdata->msg, PJSIP_H_CONTACT, NULL);
+	if (!contact) {
+		ast_log(LOG_ERROR, "There is no Contact header, please fix!\n");
+		return;
+	}
+
+	if (!update)
+		params = volte_invite_contact_params;
+	else
+		params = volte_update_contact_params;
+
+	while (*params) {
+		p = PJ_POOL_ALLOC_T(tdata->pool, pjsip_param);
+		if (!p) {
+			ast_log(LOG_ERROR, "No memory\n");
+			return;
+		}
+		pj_cstr(&name, *params++);
+		pj_cstr(&value, *params++);
+		p->name = name;
+		p->value = value;
+		pj_list_insert_before(&contact->other_param, p);
+	}
 }
 
 /* Sender and receiver of INVITE will start with this status table. */
