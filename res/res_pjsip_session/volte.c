@@ -133,7 +133,6 @@ pj_status_t volte_add_precondition(pjsip_tx_data *tdata, pj_bool_t supported)
 		}
 		if (hdr) {
 			hdr->values[hdr->count++] = STR_PRECONDITION;
-			hdr->values[hdr->count++] = STR_TDIALOG;
 		}
 		if (created)
 			pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
