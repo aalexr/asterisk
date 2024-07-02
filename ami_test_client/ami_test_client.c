@@ -108,7 +108,7 @@ void event_fullybooted (ami_event_t *event) {
 		if (do_register)
 			return;
 		sleep(1);
-		ami_action(ami, event_response, NULL, "Action: DedicatedBearerStatus\nStatus: Up");
+		ami_action(ami, event_response, NULL, "Action: Events\nEventMask: on");
 	}
 }
 
@@ -217,6 +217,27 @@ void event_authrequest (ami_event_t *event) {
 		
 }
 
+void event_newchannel (ami_event_t *event) {
+	const char *context_str;
+	context_str = ami_getvar(event, "Context");
+	printf("Call from context: %s\n", context_str);
+	if (!strcmp(context_str, "volte_ims")) {
+		printf("Set bearer status to Up after one second\n");
+		sleep(1);
+		ami_action(ami, event_response, NULL, "Action: DedicatedBearerStatus\nStatus: Up");
+	}
+}
+
+void event_hangup (ami_event_t *event) {
+	const char *context_str;
+	context_str = ami_getvar(event, "Context");
+	printf("Hangup from context: %s\n", context_str);
+	if (!strcmp(context_str, "volte_ims")) {
+		printf("Set bearer status to Down\n");
+		ami_action(ami, event_response, NULL, "Action: DedicatedBearerStatus\nStatus: Down");
+	}
+}
+
 void reconnect_ami (ami_event_t *event) {
     printf("*** Reconnecting... ***\n");
     ev_timer_stop(EV_DEFAULT, &timer_reconnect);
@@ -254,7 +275,8 @@ void event_registry (ami_event_t *event) {
 	if (!strcasecmp(status_str, "Registered")) {
 		if (!registered) {
 			registered = 1;
-			ami_action(ami, event_response, NULL, "Action: PJSIPUnregister\nRegistration: volte_ims");
+			if (!strcasecmp(function, "register"))
+				ami_action(ami, event_response, NULL, "Action: PJSIPUnregister\nRegistration: volte_ims");
 		}
 	}
 }
@@ -293,6 +315,9 @@ int main (int argc, char *argv[]) {
     ami_event_register(ami, event_authrequest, NULL, "Event: AuthRequest");
 
     ami_event_register(ami, event_registry, NULL, "Event: Registry");
+
+    ami_event_register(ami, event_newchannel, NULL, "Event: Newchannel");
+    ami_event_register(ami, event_hangup, NULL, "Event: Hangup");
 
     printf("\n");
     ami_dump_lists(ami);
