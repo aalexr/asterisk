@@ -1945,6 +1945,27 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 			media->attr[media->attr_count++] = attr;
 		}
 
+		if (!strcmp(ast_format_get_codec_name(format), "vevs")) {
+			media->bandw_count = 3;
+			pjmedia_sdp_bandw *as = PJ_POOL_ALLOC_T(pool, pjmedia_sdp_bandw);
+			pjmedia_sdp_bandw *rs = PJ_POOL_ALLOC_T(pool, pjmedia_sdp_bandw);
+			pjmedia_sdp_bandw *rr = PJ_POOL_ALLOC_T(pool, pjmedia_sdp_bandw);
+			const pj_str_t STR_BANDW_M_AS = { "AS", 2 };
+			const pj_str_t STR_BANDW_M_RS = { "RS", 2 };
+			const pj_str_t STR_BANDW_M_RR = { "RR", 2 };
+			as->value = ip.addr.sa_family == PJ_AF_INET6 ? 33 : 25;
+			as->modifier = STR_BANDW_M_AS;
+			media->bandw[0] = as;
+
+			rs->value = 600;
+			rs->modifier = STR_BANDW_M_RS;
+			media->bandw[1] = rs;
+
+			rr->value = 2000;
+			rr->modifier = STR_BANDW_M_RR;
+			media->bandw[2] = rr;
+		}
+
 		if (ast_format_get_maximum_ms(format) &&
 			((ast_format_get_maximum_ms(format) < max_packet_size) || !max_packet_size)) {
 			max_packet_size = ast_format_get_maximum_ms(format);
