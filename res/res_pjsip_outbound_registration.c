@@ -217,8 +217,8 @@
 				<configOption name="ims_aka">
 					<synopsis>Perform Voice over LTE SIP registration process.</synopsis>
 				</configOption>
-				<configOption name="imsi">
-					<synopsis>Set IMSI in contact header for VoLTE calls.</synopsis>
+				<configOption name="imei">
+					<synopsis>Set IMEI in contact header for VoLTE calls.</synopsis>
 				</configOption>
 			</configObject>
 		</configFile>
