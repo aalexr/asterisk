@@ -22,6 +22,7 @@
 #include "asterisk.h"
 
 #include "asterisk/translate.h"
+#include "asterisk/rtp_engine.h"
 #include "asterisk/module.h"
 #include "asterisk/linkedlists.h"
 
@@ -741,6 +742,7 @@ static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
 static int evs_enc_new(struct ast_trans_pvt *pvt) {
   struct evs_enc_pvt *enc = pvt->pvt;
   const unsigned int sample_rate = pvt->t->src_codec.sample_rate;
+  struct evs_attr *attr = pvt->explicit_dst ? ast_format_get_attribute_data(pvt->explicit_dst) : NULL;
   int rc;
 
   memset(enc, 0, sizeof(*enc));
@@ -896,7 +898,8 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	int16_t *dst = pvt->outbuf.i16;
 	int rc;
 	unsigned char *in = f->data.ptr;
-  struct evs_attr *attr = ast_format_get_attribute_data(f->subclass.format);
+  struct evs_attr *attr = pvt->explicit_src ? ast_format_get_attribute_data(pvt->explicit_src) : NULL;
+
   int do_hf_full = attr && attr->ftmp_hf_only.set == 1 && attr->ftmp_hf_only.val == 1;
 
 	if (BUFFER_SAMPLES - pvt->samples < dec->chunk) {
@@ -1013,7 +1016,8 @@ static struct ast_translator evstolin = {
 static int unload_module(void)
 {
 	int res;
-	res = ast_unregister_translator(&lintoevs);
+  res = ast_rtp_engine_unload_format(ast_format_vevs);
+	res |= ast_unregister_translator(&lintoevs);
 	res |= ast_unregister_translator(&evstolin);
   maybe_unload_codeclib();
 
@@ -1026,6 +1030,7 @@ static int load_module(void)
   maybe_load_codeclib();
 	res = ast_register_translator(&evstolin);
 	res |= ast_register_translator(&lintoevs);
+  res |= ast_rtp_engine_load_format(ast_format_vevs);
 
 	if (res) {
 		unload_module();
