@@ -64,18 +64,25 @@ pj_status_t volte_add_accept(pjsip_tx_data *tdata)
 {
 	pj_bool_t created = PJ_FALSE;
 	pjsip_require_hdr *hdr;
+	pj_status_t status;
 
+	status = PJ_SUCCESS;
 	hdr = pjsip_msg_find_hdr_by_name(tdata->msg, &STR_ACCEPT, NULL);
 	if (!hdr) {
 		hdr = pjsip_accept_hdr_create(tdata->pool);
-		if (!hdr)
-			return PJ_ENOMEM;
+		if (hdr)
+			created = PJ_TRUE;
+		else
+			status = PJ_ENOMEM;
 	}
-	hdr->values[hdr->count++] = STR_MIME_APP_SDP;
-	hdr->values[hdr->count++] = STR_MIME_APP_3GPP_IMS_XML;
-	pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
+	if (hdr) {
+		hdr->values[hdr->count++] = STR_MIME_APP_SDP;
+		hdr->values[hdr->count++] = STR_MIME_APP_3GPP_IMS_XML;
+	}
+	if (created)
+		pjsip_msg_add_hdr(tdata->msg, (pjsip_hdr*)hdr);
 
-	return PJ_SUCCESS;
+	return status;
 }
 
 pj_status_t volte_add_security_verify(struct ast_sip_transport_state *transport_state, pjsip_tx_data *tdata)

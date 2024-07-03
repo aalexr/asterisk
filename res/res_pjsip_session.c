@@ -4574,7 +4574,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "INVITE")) {
 			/* 3GPP TS 24.229 5.1.3.1: Add "Accept: application/sdp,application/3gpp-ims+xml" */
-			volte_add_accept(tdata, PJ_TRUE);
+			volte_add_accept(tdata);
 
 			/* P-Preferred-Service: GSMA FCM.01 3.2.3.3 */
 			volte_add_p_preferred_service(tdata, "urn:urn-7:3gpp-service.ims.icsi.mmtel");
@@ -4980,8 +4980,9 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 			ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 		}
 
-		if (status.code == 183) {
-			/* Add parameters to Contact header. */
+		/* Add parameters to Contact header. */
+		if (!pj_strcmp2(&cseq->method.name, "INVITE")
+		 || !pj_strcmp2(&cseq->method.name, "UPDATE")) {
 			volte_add_contact_params(tdata, PJ_FALSE);
 		}
 
@@ -4996,8 +4997,6 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 			if (session == precondition_session)
 				precondition_session = NULL;
 			precondition_unlock();
-			/* Add parameters to Contact header. */
-			volte_add_contact_params(tdata, PJ_FALSE);
 		}
 	}
 
