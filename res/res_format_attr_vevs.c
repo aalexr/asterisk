@@ -6,6 +6,7 @@
 
 #include <ctype.h>                      /* for tolower */
 
+#include "asterisk/format_cache.h"
 #include "asterisk/module.h"
 #include "asterisk/format.h"
 #include "asterisk/strings.h"           /* for ast_str_append */
@@ -502,8 +503,7 @@ int parse_ftmp(char *attribs) {
 }
 #else
 
-void ast_gen_ftmp(evs_attr *codec_att, struct ast_str **str);
-void ast_gen_ftmp(evs_attr *codec_att, struct ast_str **str) {
+static void ast_gen_ftmp(evs_attr *codec_att, struct ast_str **str) {
   int first = 1;
   if (codec_att->ftmp_evs_mode_switch.set) {
     wrap_ast_str_append("%sevs-mode-switch=%d", first ? "" : ";",
@@ -630,8 +630,7 @@ void ast_gen_ftmp(evs_attr *codec_att, struct ast_str **str) {
   }
 }
 
-void ast_parse_ftmp(char *attribs, evs_attr *codec_att);
-void ast_parse_ftmp(char *attribs, evs_attr *codec_att) {
+static void ast_parse_ftmp(char *attribs, evs_attr *codec_att) {
   char *tmp;
   char stmp1[8];
   char stmp2[8];
@@ -804,14 +803,18 @@ if (tta.which.set && ttb.which.set) { \
 } else { \
 	td.which.set = 0; \
 }
-#define AT_CMP_RANGE(dst, src1, src2) _AT_CMP_RANGE(dst, src1, src2, a) _AT_CMP_RANGE(dst, src1, src2, b)
+#define _FIX_RANGE(dest) \
+  if (dest.a.val == dest.b.val && dest.a.set == dest.b.set) \
+      dest.b.set = 0;
+
+#define AT_CMP_RANGE(dst, src1, src2) _AT_CMP_RANGE(dst, src1, src2, a) _AT_CMP_RANGE(dst, src1, src2, b) _FIX_RANGE(dst)
 
 #define SET_E_AT(xx,yy) .xx.set =1, .xx.val = yy,
 #define SET_E_ATR1(xx,yy) SET_E_AT(xx.a,yy)
 #define SET_E_ATR2(xx,yy, zz) SET_E_AT(xx.a,yy) SET_E_AT(xx.b,zz)
 
 static evs_attr default_attrib = {
-	SET_E_AT(ftmp_hf_only, 1)
+	// SET_E_AT(ftmp_hf_only, 1)
 	SET_E_ATR1(ftmp_range_br, DEF_ftmp_br5_9)
 	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwwb)
 	SET_E_AT(ftmp_dtx, 1)
@@ -847,6 +850,8 @@ static int evs_clone(const struct ast_format *src, struct ast_format *dst)
 	}
 
 	ast_format_set_attribute_data(dst, attr);
+  wrap_ast_fprintf( "ftmp cloned\n");
+  print_codec_settings(attr);
 
 	return 0;
 }
@@ -869,6 +874,7 @@ static struct ast_format *evs_parse_sdp_fmtp(const struct ast_format *format, co
 	} /* based on channels/chan_sip.c:process_a_sdp_image() */
 
 	ast_parse_ftmp(attribs, codec_att);
+  wrap_ast_fprintf( "ftmp parse\n");
 	print_codec_settings(codec_att);
 	return cloned;
 }
@@ -884,6 +890,7 @@ static void evs_generate_sdp_fmtp(const struct ast_format *format, unsigned int 
 	ast_str_append(str, 0, "a=fmtp:%d ", payload);
 	ast_gen_ftmp(attr, str);
 	ast_str_append(str, 0, "\r\n");
+  wrap_ast_fprintf( "ftmp gen\n");
 	print_codec_settings(attr);
 
 
@@ -894,6 +901,8 @@ static enum ast_format_cmp_res evs_cmp(const struct ast_format *format1, const s
 {
   struct evs_attr *attr1 = ast_format_get_attribute_data(format1);
 	struct evs_attr *attr2 = ast_format_get_attribute_data(format2);
+
+  // wrap_ast_fprintf( "CMP %s %s -> %p %p\n", ast_format_get_name(format1), ast_format_get_name(format2), attr1, attr2);
 
 	if (!attr1) {
 		attr1 = &default_attrib;
@@ -914,8 +923,8 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 {
 	struct evs_attr *attr1 = ast_format_get_attribute_data(format1);
 	struct evs_attr *attr2 = ast_format_get_attribute_data(format2);
-	struct ast_format *jointformat;
 	struct evs_attr *attr_res;
+	struct ast_format *jointformat = NULL;
 
 	if (!attr1) {
 		attr1 = &default_attrib;
@@ -925,34 +934,37 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 		attr2 = &default_attrib;
 	}
 
-	if (ast_format_get_sample_rate(format1) != ast_format_get_sample_rate(format2)) {
-		return NULL;
-	}
+  jointformat = ast_format_clone(format1);
 
-	jointformat = ast_format_clone(format1);
-	if (!jointformat) {
-		return NULL;
-	}
 	attr_res = ast_format_get_attribute_data(jointformat);
 
-	// if (!attr1 || !attr2) {
-	// 	attr_init(attr_res);
-	// } else {
+  attr_res->ftmp_hf_only.val = MAX(attr1->ftmp_hf_only.val,attr2->ftmp_hf_only.val);
+  attr_res->ftmp_hf_only.set = MAX(attr1->ftmp_hf_only.set,attr2->ftmp_hf_only.set);
 
-		attr_res->ftmp_hf_only.val = MAX(attr1->ftmp_hf_only.val,attr2->ftmp_hf_only.val);
-		attr_res->ftmp_hf_only.set = MAX(attr1->ftmp_hf_only.set,attr2->ftmp_hf_only.set);
+  attr_res->ftmp_dtx.val = MAX(attr1->ftmp_dtx.val,attr2->ftmp_dtx.val);
+  attr_res->ftmp_dtx.set = MAX(attr1->ftmp_dtx.set,attr2->ftmp_dtx.set);
 
-		attr_res->ftmp_dtx.val = MAX(attr1->ftmp_dtx.val,attr2->ftmp_dtx.val);
-		attr_res->ftmp_dtx.set = MAX(attr1->ftmp_dtx.set,attr2->ftmp_dtx.set);
+  AT_CMP_RANGE(attr_res->ftmp_range_br, attr1->ftmp_range_br, attr2->ftmp_range_br)
+  AT_CMP_RANGE(attr_res->ftmp_range_bw, attr1->ftmp_range_bw, attr2->ftmp_range_bw)
 
-		AT_CMP_RANGE(attr_res->ftmp_range_br, attr1->ftmp_range_br, attr2->ftmp_range_br)
-		AT_CMP_RANGE(attr_res->ftmp_range_bw, attr1->ftmp_range_bw, attr2->ftmp_range_bw)
+  attr_res->ftmp_max_red.val = MIN(attr1->ftmp_max_red.val,attr2->ftmp_max_red.val);
+  attr_res->ftmp_max_red.set = MAX(attr1->ftmp_max_red.set,attr2->ftmp_max_red.set);
 
-		attr_res->ftmp_max_red.val = MIN(attr1->ftmp_max_red.val,attr2->ftmp_max_red.val);
-		attr_res->ftmp_max_red.set = MAX(attr1->ftmp_max_red.set,attr2->ftmp_max_red.set);
-	// }
 
+  wrap_ast_fprintf( "ftmp joint\n");
+  print_codec_settings(attr_res);
+  wrap_ast_fprintf( "ftmp 1\n");
+  print_codec_settings(attr1);
+  wrap_ast_fprintf( "ftmp 2\n");
+  print_codec_settings(attr2);
 	return jointformat;
+}
+
+static struct ast_format *evs_set(const struct ast_format *format,
+	const char *name, const char *value)
+{
+  ast_log(LOG_ERROR, "set attribute type %s -> %s\n", name, value);
+	return NULL;
 }
 
 static struct ast_format_interface evs_interface = {
@@ -960,7 +972,7 @@ static struct ast_format_interface evs_interface = {
 	.format_clone = evs_clone,
 	.format_cmp = evs_cmp,
 	.format_get_joint = evs_getjoint,
-  .format_attribute_set = 0,
+  .format_attribute_set = evs_set,
 	.format_parse_sdp_fmtp = evs_parse_sdp_fmtp,
 	.format_generate_sdp_fmtp = evs_generate_sdp_fmtp,
 };
@@ -979,9 +991,9 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Vocal EVS Format Attribute Module",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER, "Vocal EVS Format Attribute Module",
 	.support_level = AST_MODULE_SUPPORT_CORE,
 	.load = load_module,
 	.unload = unload_module,
-	.load_pri = AST_MODPRI_CHANNEL_DEPEND,
+	.load_pri = AST_MODPRI_REALTIME_DRIVER,
 );
