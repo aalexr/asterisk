@@ -4308,9 +4308,14 @@ static int new_invite(struct new_invite *invite)
 		pjsip_tx_data *packet = NULL;
 
 		precondition_lock();
-		if (precondition_up) {
+		if (precondition_up || invite->session->endpoint->precondition_up) {
+			int i;
+
 			ast_debug(1, "%s: Precondition state is complete, precondition is already done.\n",
 				  ast_sip_session_get_name(invite->session));
+			for (i = 0; i < PJMEDIA_MAX_SDP_MEDIA; i++) {
+				volte_update_sdp_qos(&invite->session->qos_status[i]);
+			}
 			if (pjsip_inv_answer(invite->session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
 		                ast_sip_session_send_response(invite->session, packet);
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE OK.\n",
@@ -4851,7 +4856,7 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 			}
 		}
 		precondition_lock();
-		if (precondition_up) {
+		if (precondition_up || session->endpoint->precondition_up) {
 			enum ast_sip_session_refresh_method method = AST_SIP_SESSION_REFRESH_METHOD_UPDATE;
 			int generate_new_sdp = PJ_TRUE;
 

@@ -1114,6 +1114,9 @@ struct ast_sip_endpoint {
 	unsigned int send_aoc;
 	/*! \brief VoLTE support */
 	unsigned int ims_aka;
+	/*! Flag to declare precondtion as up, even if not set via AMI interface */
+	unsigned int precondition_up;
+
 };
 
 /*! URI parameter for symmetric transport */
