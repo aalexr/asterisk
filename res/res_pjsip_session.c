@@ -194,7 +194,7 @@ struct sdp_handler_list {
 	char stream_type[1];
 };
 
-static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer);
+static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer, pj_bool_t qos_add);
 
 static int sdp_handler_list_hash(const void *obj, int flags)
 {
@@ -1717,7 +1717,8 @@ static int delay_request(struct ast_sip_session *session,
 	SCOPE_EXIT_RTN_VALUE(0);
 }
 
-static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session *session)
+static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session *session,
+							 enum ast_sip_session_refresh_method method)
 {
 	pjsip_inv_session *inv_session = session->inv_session;
 	const pjmedia_sdp_session *previous_sdp = NULL;
@@ -1730,7 +1731,9 @@ static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session 
 			pjmedia_sdp_neg_get_active_local(inv_session->neg, &previous_sdp);
 		}
 	}
-	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0, PJ_FALSE));
+	printf("jolly on refresh sdp\n");
+	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0, PJ_FALSE,
+			     (method == AST_SIP_SESSION_REFRESH_METHOD_UPDATE)));
 }
 
 static pj_status_t set_from_header(struct ast_sip_session *session, const char *from_uri)
@@ -2307,6 +2310,7 @@ static int sip_session_refresh(struct ast_sip_session *session,
 		struct ast_sip_session_media_state *active_media_state,
 		int queued)
 {
+	printf("jolly refresh\n");
 	pjsip_inv_session *inv_session = session->inv_session;
 	pjmedia_sdp_session *new_sdp = NULL;
 	pjsip_tx_data *tdata;
@@ -2590,7 +2594,7 @@ static int sip_session_refresh(struct ast_sip_session *session,
 			session->pending_media_state = pending_media_state;
 		}
 
-		new_sdp = generate_session_refresh_sdp(session);
+		new_sdp = generate_session_refresh_sdp(session, method);
 		if (!new_sdp) {
 			ast_sip_session_media_state_reset(session->pending_media_state);
 			ast_sip_session_media_state_free(active_media_state);
@@ -2672,7 +2676,8 @@ int ast_sip_session_regenerate_answer(struct ast_sip_session *session,
 		pjmedia_sdp_neg_set_remote_offer(inv_session->pool, inv_session->neg, previous_offer);
 	}
 
-	new_answer = create_local_sdp(inv_session, session, previous_offer, 0, PJ_FALSE);
+	printf("jolly on regerate answer\n");
+	new_answer = create_local_sdp(inv_session, session, previous_offer, 0, PJ_FALSE, PJ_TRUE);
 	if (!new_answer) {
 		ast_log(LOG_WARNING, "Could not create a new local SDP answer for channel '%s'\n",
 			ast_channel_name(session->channel));
@@ -3010,7 +3015,8 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
-	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE))) {
+	printf("jolly on create invite\n");
+	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE, PJ_TRUE))) {
 		pjsip_inv_terminate(session->inv_session, 500, PJ_FALSE);
 		SCOPE_EXIT_RTN_VALUE(-1, "Couldn't create offer\n");
 	}
@@ -4269,6 +4275,7 @@ static int new_invite(struct new_invite *invite)
 		invite->session->exten);
 	ast_sip_session_send_response(invite->session, tdata);
 
+	printf("jolly on new invite\n\n");
 	sdp_info = pjsip_rdata_get_sdp_info(invite->rdata);
 	if (sdp_info && (sdp_info->sdp_err == PJ_SUCCESS) && sdp_info->sdp) {
 		if (handle_incoming_sdp(invite->session, sdp_info->sdp)) {
@@ -4280,10 +4287,11 @@ static int new_invite(struct new_invite *invite)
 			goto end;
 		}
 		/* We are creating a local SDP which is an answer to their offer */
-		local = create_local_sdp(invite->session->inv_session, invite->session, sdp_info->sdp, 0, PJ_TRUE);
+		local = create_local_sdp(invite->session->inv_session, invite->session, sdp_info->sdp, 0, PJ_TRUE,
+					 PJ_TRUE);
 	} else {
 		/* We are creating a local SDP which is an offer */
-		local = create_local_sdp(invite->session->inv_session, invite->session, NULL, 0, PJ_FALSE);
+		local = create_local_sdp(invite->session->inv_session, invite->session, NULL, 0, PJ_FALSE, PJ_TRUE);
 	}
 
 	/* If we were unable to create a local SDP terminate the session early, it won't go anywhere */
@@ -4535,6 +4543,28 @@ static pj_bool_t session_on_rx_request(pjsip_rx_data *rdata)
 }
 
 
+static const char *volte_invite_contact_params[] = {
+	"+g.3gpp.icsi-ref",
+	"\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+	"audio",
+	"",
+	"+g.3gpp.mid-call",
+	"",
+	"+g.3gpp.srvcc-alerting",
+	"",
+	"+g.3gpp.ps2cs-srvcc-orig-pre-alerting",
+	"",
+	NULL
+};
+
+static const char *volte_other_contact_params[] = {
+	"+g.3gpp.icsi-ref",
+	"\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+	"audio",
+	"",
+	NULL
+};
+
 static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 {
 	pjsip_dialog *dlg = pjsip_tdata_get_dlg(tdata);
@@ -4578,8 +4608,14 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 		}
 
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "INVITE")) {
+			pj_bool_t first_invite = (session->inv_session->state == PJSIP_INV_STATE_CALLING);
+
 			/* 3GPP TS 24.229 5.1.3.1: Add "Accept: application/sdp,application/3gpp-ims+xml" */
-			volte_add_accept(tdata);
+			if (first_invite)
+				volte_add_accept(tdata);
+
+			/* Accept-Contact */
+			volte_add_accept_contact(tdata, "*;+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\";audio");
 
 			/* P-Preferred-Service: GSMA FCM.01 3.2.3.3 */
 			volte_add_p_preferred_service(tdata, "urn:urn-7:3gpp-service.ims.icsi.mmtel");
@@ -4593,7 +4629,8 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 				ast_log(LOG_ERROR, "Failed to add P-Early-Media header.\n");
 			}
 			/* Add parameters to Contact header. */
-			volte_add_contact_params(tdata, PJ_TRUE);
+			volte_add_contact_params(tdata, (first_invite) ? volte_invite_contact_params :
+									 volte_other_contact_params);
 		}
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "UPDATE")) {
 			/* Add Require: precondition */
@@ -4601,7 +4638,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
 			/* Add parameters to Contact header. */
-			volte_add_contact_params(tdata, PJ_FALSE);
+			volte_add_contact_params(tdata, volte_other_contact_params);
 		}
 
 		ao2_unlock(transport_state);
@@ -4988,7 +5025,7 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 		/* Add parameters to Contact header. */
 		if (!pj_strcmp2(&cseq->method.name, "INVITE")
 		 || !pj_strcmp2(&cseq->method.name, "UPDATE")) {
-			volte_add_contact_params(tdata, PJ_FALSE);
+			volte_add_contact_params(tdata, volte_other_contact_params);
 		}
 
 		ao2_unlock(transport_state);
@@ -5565,7 +5602,7 @@ static int add_bundle_groups(struct ast_sip_session *session, pj_pool_t *pool, p
 	return 0;
 }
 
-static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer)
+static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer, pj_bool_t qos_add)
 {
 	static const pj_str_t STR_IN = { "IN", 2 };
 	static const pj_str_t STR_IP4 = { "IP4", 3 };
@@ -5574,6 +5611,7 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 	int i;
 	int stream;
 	SCOPE_ENTER(3, "%s\n", ast_sip_session_get_name(session));
+	printf("jolly local sdp\n");
 
 	if (inv->state == PJSIP_INV_STATE_DISCONNECTED) {
 		SCOPE_EXIT_LOG_RTN_VALUE(NULL, LOG_ERROR, "%s: Failed to create session SDP. Session has been already disconnected\n",
@@ -5645,7 +5683,7 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 		}
 
 		/* Add QOS attributes to each media. */
-		if (session->endpoint->ims_aka) {
+		if (session->endpoint->ims_aka && qos_add) {
 			/* On offer, do negotiation and then add QOS attributes. */
 			if (offer && qos_offer) {
 				struct ast_sip_session_qos_status remote_status;
@@ -5756,7 +5794,8 @@ static void session_inv_on_rx_offer(pjsip_inv_session *inv, const pjmedia_sdp_se
 		SCOPE_EXIT_RTN("%s: handle_incoming_sdp failed\n", ast_sip_session_get_name(session));
 	}
 
-	if ((answer = create_local_sdp(inv, session, offer, 0, PJ_TRUE))) {
+	puts("on rx offer");
+	if ((answer = create_local_sdp(inv, session, offer, 0, PJ_TRUE, PJ_TRUE))) {
 		pjsip_inv_set_sdp_answer(inv, answer);
 		SCOPE_EXIT_RTN("%s: Set SDP answer\n", ast_sip_session_get_name(session));
 	}
@@ -5807,10 +5846,11 @@ static void session_inv_on_create_offer(pjsip_inv_session *inv, pjmedia_sdp_sess
 		}
 	}
 
+	printf("jolly on create offer\n");
 	if (ignore_active_stream_topology) {
-		offer = create_local_sdp(inv, session, NULL, 1, PJ_FALSE);
+		offer = create_local_sdp(inv, session, NULL, 1, PJ_FALSE, PJ_TRUE);
 	} else {
-		offer = create_local_sdp(inv, session, previous_sdp, 0, PJ_FALSE);
+		offer = create_local_sdp(inv, session, previous_sdp, 0, PJ_FALSE, PJ_TRUE);
 	}
 	if (!offer) {
 		SCOPE_EXIT_RTN("%s: create offer failed\n", ast_sip_session_get_name(session));
@@ -6065,6 +6105,23 @@ static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_trans
 	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, session_module.id, MOD_DATA_NAT_HOOK, nat_hook);
 }
 
+static int session_progress_task(void *data)
+{
+	struct ast_sip_session *session = data;
+	pjsip_tx_data *packet = NULL;
+
+	if (session->defer_terminate) {
+		session->defer_terminate = 0;
+		if (session->inv_session) {
+			if (pjsip_inv_answer(session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
+		                ast_sip_session_send_response(session, packet);
+		}
+	}
+
+	ao2_ref(session, -1);
+	return 0;
+}
+
 static int ami_dedicatedbearerstatus(struct mansession *s, const struct message *m)
 {
 	const char *status_str = astman_get_header(m, "Status");
@@ -6091,7 +6148,6 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 
 	if (precondition_session) {
 		struct ast_sip_session *session = precondition_session;
-		pjsip_tx_data *packet = NULL;
 		int i;
 
 		precondition_session = NULL;
@@ -6107,11 +6163,10 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 						AST_SIP_SESSION_REFRESH_METHOD_UPDATE, PJ_TRUE, NULL);
 			break;
 		case AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER:
-			if (pjsip_inv_answer(session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
-		                ast_sip_session_send_response(session, packet);
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE OK.\n",
 				  ast_sip_session_get_name(session));
 			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE;
+			ast_sip_push_task(session->serializer, session_progress_task, session);
 			break;
 		default:
 		}
