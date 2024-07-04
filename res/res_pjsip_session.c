@@ -6105,23 +6105,6 @@ static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_trans
 	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, session_module.id, MOD_DATA_NAT_HOOK, nat_hook);
 }
 
-static int session_progress_task(void *data)
-{
-	struct ast_sip_session *session = data;
-	pjsip_tx_data *packet = NULL;
-
-	if (session->defer_terminate) {
-		session->defer_terminate = 0;
-		if (session->inv_session) {
-			if (pjsip_inv_answer(session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
-		                ast_sip_session_send_response(session, packet);
-		}
-	}
-
-	ao2_ref(session, -1);
-	return 0;
-}
-
 static int ami_dedicatedbearerstatus(struct mansession *s, const struct message *m)
 {
 	const char *status_str = astman_get_header(m, "Status");
@@ -6148,6 +6131,7 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 
 	if (precondition_session) {
 		struct ast_sip_session *session = precondition_session;
+		pjsip_tx_data *packet = NULL;
 		int i;
 
 		precondition_session = NULL;
@@ -6166,7 +6150,8 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE OK.\n",
 				  ast_sip_session_get_name(session));
 			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE;
-			ast_sip_push_task(session->serializer, session_progress_task, session);
+			if (pjsip_inv_answer(session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
+		                ast_sip_session_send_response(session, packet);
 			break;
 		default:
 		}
