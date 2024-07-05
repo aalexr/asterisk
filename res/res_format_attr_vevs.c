@@ -6,6 +6,7 @@
 
 #include <ctype.h>                      /* for tolower */
 
+#include "asterisk/config.h"
 #include "asterisk/format_cache.h"
 #include "asterisk/module.h"
 #include "asterisk/format.h"
@@ -959,12 +960,69 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
   print_codec_settings(attr2);
 	return jointformat;
 }
-
-static struct ast_format *evs_set(const struct ast_format *format,
-	const char *name, const char *value)
+/* pointless unused functions ?
+static struct ast_format *evs_set(const struct ast_format *format, const char *name, const char *value)
 {
+  struct ast_format *cloned;
+	struct evs_attr *attr;
+	int val;
+
+	if (!(cloned = ast_format_clone(format))) {
+		return NULL;
+	}
+  attr = ast_format_get_attribute_data(cloned);
+
+	if (!strcasecmp(name, CODEC_VEVS_ATTR_HF_ONLY)) {
+    if (sscanf(value, "%d", &val) != 1) {
+      ast_log(LOG_ERROR, "error parsing codec attr %s -> %s\n", name, value);
+      ao2_ref(cloned, -1);
+      return NULL;
+    }
+    attr->ftmp_hf_only.val = val;
+    attr->ftmp_hf_only.set = val ? 1 : 0;
+  }
+
   ast_log(LOG_ERROR, "set attribute type %s -> %s\n", name, value);
-	return NULL;
+	return cloned;
+}
+
+static const void *evs_get(const struct ast_format *format, const char *name)
+{
+	struct evs_attr *attr = ast_format_get_attribute_data(format);
+	int *val = NULL;
+
+	if (!attr) {
+		return NULL;
+	}
+
+	if (!strcasecmp(name, CODEC_VEVS_ATTR_HF_ONLY)) {
+    if (attr->ftmp_hf_only.set)
+		  return &attr->ftmp_hf_only.val;
+  }
+  return val;
+}
+*/
+static int evs_load_cfg(void)
+{
+	struct ast_variable *var;
+	struct ast_flags config_flags = { 0 };
+	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
+
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
+		return 0;
+	}
+
+	for (var = ast_variable_browse(cfg, "vevs"); var; var = var->next) {
+		if (!strcasecmp(var->name, CODEC_VEVS_ATTR_HF_ONLY)) {
+      int val = atoi(var->value);
+			if (val >= 0 && val <= 1) {
+        default_attrib.ftmp_hf_only.val = val;
+        default_attrib.ftmp_hf_only.set = val ? 1 : 0;
+      }
+		}
+	}
+	ast_config_destroy(cfg);
+	return 0;
 }
 
 static struct ast_format_interface evs_interface = {
@@ -972,7 +1030,10 @@ static struct ast_format_interface evs_interface = {
 	.format_clone = evs_clone,
 	.format_cmp = evs_cmp,
 	.format_get_joint = evs_getjoint,
+/* pointless unused functions ?
   .format_attribute_set = evs_set,
+  .format_attribute_get = evs_get,
+*/
 	.format_parse_sdp_fmtp = evs_parse_sdp_fmtp,
 	.format_generate_sdp_fmtp = evs_generate_sdp_fmtp,
 };
@@ -982,6 +1043,8 @@ static int load_module(void)
 	if (ast_format_interface_register("vevs", &evs_interface)) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
+
+  evs_load_cfg();
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
