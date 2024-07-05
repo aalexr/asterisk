@@ -31,3 +31,5 @@ struct evs_attr {
   struct maybe_set_twice ftmp_range_bw_recv;
 };
 typedef struct evs_attr evs_attr;
+
+#define CODEC_VEVS_ATTR_HF_ONLY "hf_only"
