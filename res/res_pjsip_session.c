@@ -194,7 +194,7 @@ struct sdp_handler_list {
 	char stream_type[1];
 };
 
-static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer, pj_bool_t qos_add);
+static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer);
 
 static int sdp_handler_list_hash(const void *obj, int flags)
 {
@@ -1717,8 +1717,7 @@ static int delay_request(struct ast_sip_session *session,
 	SCOPE_EXIT_RTN_VALUE(0);
 }
 
-static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session *session,
-							 enum ast_sip_session_refresh_method method)
+static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session *session)
 {
 	pjsip_inv_session *inv_session = session->inv_session;
 	const pjmedia_sdp_session *previous_sdp = NULL;
@@ -1731,8 +1730,7 @@ static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session 
 			pjmedia_sdp_neg_get_active_local(inv_session->neg, &previous_sdp);
 		}
 	}
-	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0, PJ_FALSE,
-			     (method == AST_SIP_SESSION_REFRESH_METHOD_UPDATE)));
+	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0, PJ_FALSE));
 }
 
 static pj_status_t set_from_header(struct ast_sip_session *session, const char *from_uri)
@@ -2592,7 +2590,7 @@ static int sip_session_refresh(struct ast_sip_session *session,
 			session->pending_media_state = pending_media_state;
 		}
 
-		new_sdp = generate_session_refresh_sdp(session, method);
+		new_sdp = generate_session_refresh_sdp(session);
 		if (!new_sdp) {
 			ast_sip_session_media_state_reset(session->pending_media_state);
 			ast_sip_session_media_state_free(active_media_state);
@@ -2674,7 +2672,7 @@ int ast_sip_session_regenerate_answer(struct ast_sip_session *session,
 		pjmedia_sdp_neg_set_remote_offer(inv_session->pool, inv_session->neg, previous_offer);
 	}
 
-	new_answer = create_local_sdp(inv_session, session, previous_offer, 0, PJ_FALSE, PJ_TRUE);
+	new_answer = create_local_sdp(inv_session, session, previous_offer, 0, PJ_FALSE);
 	if (!new_answer) {
 		ast_log(LOG_WARNING, "Could not create a new local SDP answer for channel '%s'\n",
 			ast_channel_name(session->channel));
@@ -3012,7 +3010,7 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
-	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE, PJ_TRUE))) {
+	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE))) {
 		pjsip_inv_terminate(session->inv_session, 500, PJ_FALSE);
 		SCOPE_EXIT_RTN_VALUE(-1, "Couldn't create offer\n");
 	}
@@ -4271,6 +4269,13 @@ static int new_invite(struct new_invite *invite)
 		invite->session->exten);
 	ast_sip_session_send_response(invite->session, tdata);
 
+	/* Setting state to "MT_COMPLETE", so that SDP is not generated with QOS attributes. */
+	if (!volte_is_supported_precondition(invite->rdata)) {
+		ast_debug(1, "%s: Precondition is not supported for MT call.\n",
+			  ast_sip_session_get_name(invite->session));
+		invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
+	}
+
 	sdp_info = pjsip_rdata_get_sdp_info(invite->rdata);
 	if (sdp_info && (sdp_info->sdp_err == PJ_SUCCESS) && sdp_info->sdp) {
 		if (handle_incoming_sdp(invite->session, sdp_info->sdp)) {
@@ -4282,11 +4287,10 @@ static int new_invite(struct new_invite *invite)
 			goto end;
 		}
 		/* We are creating a local SDP which is an answer to their offer */
-		local = create_local_sdp(invite->session->inv_session, invite->session, sdp_info->sdp, 0, PJ_TRUE,
-					 PJ_TRUE);
+		local = create_local_sdp(invite->session->inv_session, invite->session, sdp_info->sdp, 0, PJ_TRUE);
 	} else {
 		/* We are creating a local SDP which is an offer */
-		local = create_local_sdp(invite->session->inv_session, invite->session, NULL, 0, PJ_FALSE, PJ_TRUE);
+		local = create_local_sdp(invite->session->inv_session, invite->session, NULL, 0, PJ_FALSE);
 	}
 
 	/* If we were unable to create a local SDP terminate the session early, it won't go anywhere */
@@ -4307,11 +4311,16 @@ static int new_invite(struct new_invite *invite)
 	}
 #endif
 
-	if (invite->session->endpoint->ims_aka) {
+	if (invite->session->endpoint->ims_aka &&
+	    invite->session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
 		pjsip_tx_data *packet = NULL;
 
 		precondition_lock();
-		if (precondition_up || invite->session->endpoint->precondition_up) {
+		if (!volte_is_supported_precondition(invite->rdata)) {
+			ast_debug(1, "%s: Precondition is not supported for MT call.\n",
+				  ast_sip_session_get_name(invite->session));
+			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
+		} else if (precondition_up || invite->session->endpoint->precondition_up) {
 			int i;
 
 			ast_debug(1, "%s: Precondition state is complete, precondition is already done.\n",
@@ -5599,7 +5608,7 @@ static int add_bundle_groups(struct ast_sip_session *session, pj_pool_t *pool, p
 	return 0;
 }
 
-static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer, pj_bool_t qos_add)
+static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session, const pjmedia_sdp_session *offer, const unsigned int ignore_active_stream_topology, pj_bool_t qos_offer)
 {
 	static const pj_str_t STR_IN = { "IN", 2 };
 	static const pj_str_t STR_IP4 = { "IP4", 3 };
@@ -5679,7 +5688,9 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 		}
 
 		/* Add QOS attributes to each media. */
-		if (session->endpoint->ims_aka && qos_add) {
+		if (session->endpoint->ims_aka &&
+		    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MO_COMPLETE &&
+		    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
 			/* On offer, do negotiation and then add QOS attributes. */
 			if (offer && qos_offer) {
 				struct ast_sip_session_qos_status remote_status;
@@ -5790,7 +5801,7 @@ static void session_inv_on_rx_offer(pjsip_inv_session *inv, const pjmedia_sdp_se
 		SCOPE_EXIT_RTN("%s: handle_incoming_sdp failed\n", ast_sip_session_get_name(session));
 	}
 
-	if ((answer = create_local_sdp(inv, session, offer, 0, PJ_TRUE, PJ_TRUE))) {
+	if ((answer = create_local_sdp(inv, session, offer, 0, PJ_TRUE))) {
 		pjsip_inv_set_sdp_answer(inv, answer);
 		SCOPE_EXIT_RTN("%s: Set SDP answer\n", ast_sip_session_get_name(session));
 	}
@@ -5842,9 +5853,9 @@ static void session_inv_on_create_offer(pjsip_inv_session *inv, pjmedia_sdp_sess
 	}
 
 	if (ignore_active_stream_topology) {
-		offer = create_local_sdp(inv, session, NULL, 1, PJ_FALSE, PJ_TRUE);
+		offer = create_local_sdp(inv, session, NULL, 1, PJ_FALSE);
 	} else {
-		offer = create_local_sdp(inv, session, previous_sdp, 0, PJ_FALSE, PJ_TRUE);
+		offer = create_local_sdp(inv, session, previous_sdp, 0, PJ_FALSE);
 	}
 	if (!offer) {
 		SCOPE_EXIT_RTN("%s: create offer failed\n", ast_sip_session_get_name(session));

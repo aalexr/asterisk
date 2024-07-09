@@ -17,3 +17,4 @@ pj_status_t volte_negotiate_sdp_qos(struct ast_sip_session_qos_status *local_sta
 				    struct ast_sip_session_qos_status *remote_status,
 				    const char *reason);
 pj_status_t volte_update_sdp_qos(struct ast_sip_session_qos_status *local_status);
+pj_bool_t volte_is_supported_precondition(pjsip_rx_data *rdata);

@@ -26,21 +26,21 @@
 
 #define DEF_STR(str) { str, sizeof(str) - 1 }
 
-const pj_str_t STR_ACCEPT = DEF_STR("Accept");
-const pj_str_t STR_ACCEPT_CONTACT = DEF_STR("Accept-Contact");
-const pj_str_t STR_MIME_APP_SDP = DEF_STR("application/sdp");
-const pj_str_t STR_MIME_APP_3GPP_IMS_XML = DEF_STR("application/3gpp-ims+xml");
-const pj_str_t STR_SECURITY_VERIFY = DEF_STR("Security-Verify");
-const pj_str_t STR_REQUIRE = DEF_STR("Require");
-const pj_str_t STR_P_PREFERRED_SERVICE = DEF_STR("P-Preferred-Service");
-const pj_str_t STR_PROXY_REQUIRE = DEF_STR("Proxy-Require");
-const pj_str_t STR_SEC_AGREE = DEF_STR("sec-agree");
-const pj_str_t STR_P_ACCESS_NETWORK_INFO = DEF_STR("P-Access-Network-Info");
-const pj_str_t STR_SUPPORTED_HDR = DEF_STR("Supported");
-const pj_str_t STR_SUPPORTED_VAL = DEF_STR("supported");
-const pj_str_t STR_PRECONDITION = DEF_STR("precondition");
-const pj_str_t STR_P_EARLY_MEDIA = DEF_STR("P-Early-Media");
-const pj_str_t STR_RECVONLY = DEF_STR("recvonly");
+static const pj_str_t STR_ACCEPT = DEF_STR("Accept");
+static const pj_str_t STR_ACCEPT_CONTACT = DEF_STR("Accept-Contact");
+static const pj_str_t STR_MIME_APP_SDP = DEF_STR("application/sdp");
+static const pj_str_t STR_MIME_APP_3GPP_IMS_XML = DEF_STR("application/3gpp-ims+xml");
+static const pj_str_t STR_SECURITY_VERIFY = DEF_STR("Security-Verify");
+static const pj_str_t STR_REQUIRE = DEF_STR("Require");
+static const pj_str_t STR_P_PREFERRED_SERVICE = DEF_STR("P-Preferred-Service");
+static const pj_str_t STR_PROXY_REQUIRE = DEF_STR("Proxy-Require");
+static const pj_str_t STR_SEC_AGREE = DEF_STR("sec-agree");
+static const pj_str_t STR_P_ACCESS_NETWORK_INFO = DEF_STR("P-Access-Network-Info");
+static const pj_str_t STR_SUPPORTED_HDR = DEF_STR("Supported");
+static const pj_str_t STR_SUPPORTED_VAL = DEF_STR("supported");
+static const pj_str_t STR_PRECONDITION = DEF_STR("precondition");
+static const pj_str_t STR_P_EARLY_MEDIA = DEF_STR("P-Early-Media");
+static const pj_str_t STR_RECVONLY = DEF_STR("recvonly");
 
 /* Create string header and add given value. */
 static pj_status_t add_value_string_hdr(pjsip_tx_data *tdata, const pj_str_t *name, const pj_str_t *value)
@@ -698,4 +698,20 @@ pj_status_t volte_update_sdp_qos(struct ast_sip_session_qos_status *local_status
 	local_status->remote_conf_set = PJ_FALSE;
 
 	return PJ_SUCCESS;
+}
+
+pj_bool_t volte_is_supported_precondition(pjsip_rx_data *rdata)
+{
+	pjsip_supported_hdr *sup_hdr = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_SUPPORTED, NULL);
+	int i;
+
+	if (!sup_hdr)
+		return PJ_FALSE;
+
+	for (i = 0; i < sup_hdr->count; i++) {
+		if (!pj_stricmp2(&sup_hdr->values[i], "precondition"))
+			return PJ_TRUE;
+	}
+
+	return PJ_FALSE;
 }
