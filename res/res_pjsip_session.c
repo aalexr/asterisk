@@ -1731,7 +1731,6 @@ static pjmedia_sdp_session *generate_session_refresh_sdp(struct ast_sip_session 
 			pjmedia_sdp_neg_get_active_local(inv_session->neg, &previous_sdp);
 		}
 	}
-	printf("jolly on refresh sdp\n");
 	SCOPE_EXIT_RTN_VALUE(create_local_sdp(inv_session, session, previous_sdp, 0, PJ_FALSE,
 			     (method == AST_SIP_SESSION_REFRESH_METHOD_UPDATE)));
 }
@@ -2310,7 +2309,6 @@ static int sip_session_refresh(struct ast_sip_session *session,
 		struct ast_sip_session_media_state *active_media_state,
 		int queued)
 {
-	printf("jolly refresh\n");
 	pjsip_inv_session *inv_session = session->inv_session;
 	pjmedia_sdp_session *new_sdp = NULL;
 	pjsip_tx_data *tdata;
@@ -2676,7 +2674,6 @@ int ast_sip_session_regenerate_answer(struct ast_sip_session *session,
 		pjmedia_sdp_neg_set_remote_offer(inv_session->pool, inv_session->neg, previous_offer);
 	}
 
-	printf("jolly on regerate answer\n");
 	new_answer = create_local_sdp(inv_session, session, previous_offer, 0, PJ_FALSE, PJ_TRUE);
 	if (!new_answer) {
 		ast_log(LOG_WARNING, "Could not create a new local SDP answer for channel '%s'\n",
@@ -3015,7 +3012,6 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
-	printf("jolly on create invite\n");
 	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE, PJ_TRUE))) {
 		pjsip_inv_terminate(session->inv_session, 500, PJ_FALSE);
 		SCOPE_EXIT_RTN_VALUE(-1, "Couldn't create offer\n");
@@ -4275,7 +4271,6 @@ static int new_invite(struct new_invite *invite)
 		invite->session->exten);
 	ast_sip_session_send_response(invite->session, tdata);
 
-	printf("jolly on new invite\n\n");
 	sdp_info = pjsip_rdata_get_sdp_info(invite->rdata);
 	if (sdp_info && (sdp_info->sdp_err == PJ_SUCCESS) && sdp_info->sdp) {
 		if (handle_incoming_sdp(invite->session, sdp_info->sdp)) {
@@ -5611,7 +5606,6 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 	int i;
 	int stream;
 	SCOPE_ENTER(3, "%s\n", ast_sip_session_get_name(session));
-	printf("jolly local sdp\n");
 
 	if (inv->state == PJSIP_INV_STATE_DISCONNECTED) {
 		SCOPE_EXIT_LOG_RTN_VALUE(NULL, LOG_ERROR, "%s: Failed to create session SDP. Session has been already disconnected\n",
@@ -5846,7 +5840,6 @@ static void session_inv_on_create_offer(pjsip_inv_session *inv, pjmedia_sdp_sess
 		}
 	}
 
-	printf("jolly on create offer\n");
 	if (ignore_active_stream_topology) {
 		offer = create_local_sdp(inv, session, NULL, 1, PJ_FALSE, PJ_TRUE);
 	} else {
