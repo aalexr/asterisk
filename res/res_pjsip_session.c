@@ -4888,7 +4888,8 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 		status.code, (int) pj_strlen(&status.reason), pj_strbuf(&status.reason));
 
 	/* Handle "Session Progress" during precondition. */
-	if (session->endpoint && session->endpoint->ims_aka && status.code == 183) {
+	if (session->endpoint && session->endpoint->ims_aka && status.code == 183 &&
+	    session->precondition_state == AST_SIP_SESSION_PRECONDITION_MO_WAIT_PROGRESS) {
 		sdp_info = pjsip_rdata_get_sdp_info(rdata);
 		if (sdp_info && sdp_info->sdp) {
 			for (i = 0; i < sdp_info->sdp->media_count; i++) {
