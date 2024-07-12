@@ -100,35 +100,36 @@ static void precondition_unlock(void)
  *
  * * AST_SIP_SESSION_PRECONDITION_MO_WAIT_BEARER
  *
- * This state is entered, if the dedicated bearer is not established after
- * progress has been received.
+ * This state is entered, if the dedicated bearer is not up after progress has
+ * been received.
  *
  * * AST_SIP_SESSION_PRECONDITION_MO_UPDATE
  *
  * This state is entered, when update has been sent. This happens, if
- * response 183 has been received and the dedicated bearer is established.
+ * response 183 has been received and the dedicated bearer is up.
  *
  * * AST_SIP_SESSION_PRECONDITION_MO_COMPLETE
  *
- * This state is entered, if dedicated bearer is already established or when
- * UPDATE has been acknowledged by remote peer.
+ * This state is entered, if dedicated bearer is already up or when UPDATE has
+ * been acknowledged by remote peer.
  *
  *
  * A MT call has teh following precondition states
  *
- * * AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER
- *
- * This state is entered, if the dedicated bearer is not established after
- * call setup. Response 183 has been sent.
- *
  * * AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE
  *
- * This state is entered, when the dedicated bearer is established. Progress
- * has been sent. Sending UPDATE OK is awaited.
+ * This state is entered, when the call has been received. Response 183 has
+ * been sent. Sending UPDATE OK is awaited.
+ *
+ * * AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER
+ *
+ * This state is entered, if the UPDATE OK has been sent, but the dedicated
+ * bearer is not yet up.
  *
  * * AST_SIP_SESSION_PRECONDITION_MT_COMPLETE
  *
- * This state is entered, after UPDATE has been acknowledged by local peer.
+ * This state is entered, after UPDATE OK has been sent and the dedicated
+ * bearer is up.
  *
  *
  * The global variable "precondition_up" reflects the current dedicated bearer
@@ -145,10 +146,10 @@ static void precondition_unlock(void)
  *
  * A global pointer "precondition_session" points to the session that is
  * waiting for precondtion to become up. This pointer is set when and only
- * when the call is in AST_SIP_SESSION_PRECONDITION_MO_WAIT_PROGRESS,
- * AST_SIP_SESSION_PRECONDITION_MO_WAIT_BEARER or
- * AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER state. Any other call is
- * rejected.
+ * when the MO call is in AST_SIP_SESSION_PRECONDITION_MO_WAIT_BEARER state or
+ * previous state or when the MT call is in
+ * AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER state or previous state.
+ * Any other call is rejected.
  */
 
 /* Some forward declarations */
@@ -4320,23 +4321,17 @@ static int new_invite(struct new_invite *invite)
 			ast_debug(1, "%s: Precondition is not supported for MT call.\n",
 				  ast_sip_session_get_name(invite->session));
 			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
-		} else if (precondition_up || invite->session->endpoint->precondition_up) {
+		} else {
 			int i;
 
-			ast_debug(1, "%s: Precondition state is complete, precondition is already done.\n",
+			if (pjsip_inv_answer(invite->session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
+		                ast_sip_session_send_response(invite->session, packet);
+			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
 				  ast_sip_session_get_name(invite->session));
 			for (i = 0; i < PJMEDIA_MAX_SDP_MEDIA; i++) {
 				volte_update_sdp_qos(&invite->session->qos_status[i]);
 			}
-			if (pjsip_inv_answer(invite->session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
-		                ast_sip_session_send_response(invite->session, packet);
-			ast_debug(1, "%s: Precondition state is waiting for UPDATE OK.\n",
-				  ast_sip_session_get_name(invite->session));
 			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE;
-		} else {
-			ast_debug(1, "%s: Precondition state is waiting for dedicated bearer.\n",
-				  ast_sip_session_get_name(invite->session));
-			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER;
 			precondition_session = invite->session;
 		}
 		precondition_unlock();
@@ -5037,14 +5032,21 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 
 		ao2_unlock(transport_state);
 		ao2_cleanup(transport_state);
+
 		if (session->precondition_state == AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE && status.code == 200 &&
 		    cseq && !pj_strcmp2(&cseq->method.name, "UPDATE")) {
-			ast_debug(1, "%s: Precondition state is complete.\n",
-				  ast_sip_session_get_name(session));
-			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
 			precondition_lock();
-			if (session == precondition_session)
-				precondition_session = NULL;
+			if (precondition_up || session->endpoint->precondition_up) {
+				ast_debug(1, "%s: Precondition state is complete.\n",
+					  ast_sip_session_get_name(session));
+				session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
+				if (session == precondition_session)
+					precondition_session = NULL;
+			} else {
+				ast_debug(1, "%s: Precondition state is waiting for dedicaed bearer.\n",
+					  ast_sip_session_get_name(session));
+				session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER;
+			}
 			precondition_unlock();
 		}
 	}
@@ -6137,27 +6139,24 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 
 	if (precondition_session) {
 		struct ast_sip_session *session = precondition_session;
-		pjsip_tx_data *packet = NULL;
 		int i;
 
 		precondition_session = NULL;
-		for (i = 0; i < PJMEDIA_MAX_SDP_MEDIA; i++) {
-			volte_update_sdp_qos(&session->qos_status[i]);
-		}
 		switch (session->precondition_state) {
 		case AST_SIP_SESSION_PRECONDITION_MO_WAIT_BEARER:
-			ast_debug(1, "%s: Precondition state is send UPDATE.\n",
+			ast_debug(1, "%s: Precondition state is send UPDATE to complete.\n",
 				  ast_sip_session_get_name(session));
 			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_UPDATE;
+			for (i = 0; i < PJMEDIA_MAX_SDP_MEDIA; i++) {
+				volte_update_sdp_qos(&session->qos_status[i]);
+			}
 			ast_sip_session_refresh(session, NULL, NULL, NULL,
 						AST_SIP_SESSION_REFRESH_METHOD_UPDATE, PJ_TRUE, NULL);
 			break;
 		case AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER:
-			ast_debug(1, "%s: Precondition state is waiting for UPDATE OK.\n",
+			ast_debug(1, "%s: Precondition state is complete.\n",
 				  ast_sip_session_get_name(session));
-			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE;
-			if (pjsip_inv_answer(session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
-		                ast_sip_session_send_response(session, packet);
+			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
 			break;
 		default:
 		}
