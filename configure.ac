@@ -584,9 +584,7 @@ AST_EXT_LIB_SETUP([OPUSFILE], [Opusfile], [opusfile])
 AST_EXT_LIB_SETUP([OSPTK], [OSP Toolkit], [osptk])
 AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([BEANSTALK], [Beanstalk Job Queue], [beanstalk])
-#FIXME
-AST_EXT_LIB_SETUP([VEVS], [Vocal EVS Audio Decoder/Encoder], [bluetooth])
-#AST_EXT_LIB_SETUP([VEVS], [Vocal EVS Audio Decoder/Encoder], [vocal-evs])
+AST_EXT_LIB_SETUP([VEVS], [Vocal EVS Audio Decoder/Encoder], [vevs])
 AST_EXT_LIB_SETUP([LIBMNL], [MNL library], [mnl])
 
 if test "x${PBX_PJPROJECT}" != "x1" ; then
@@ -2424,10 +2422,12 @@ AST_EXT_LIB_CHECK([BLUETOOTH], [bluetooth], [ba2str], [bluetooth/bluetooth.h])
 
 AST_EXT_LIB_CHECK([BEANSTALK], [beanstalk], [bs_version], [beanstalk.h])
 
-#FIXME
-AST_EXT_LIB_CHECK([VEVS], [bluetooth], [ba2str], [bluetooth/bluetooth.h])
+AST_PKG_CONFIG_CHECK(VEVS, libvevs)
+# AST_EXT_LIB_CHECK([VEVS], [vevs], [vocal_evs_init_coder], [evs/evs.h])
+
 AST_EXT_LIB_CHECK([LIBMNL], [mnl], [mnl_socket_open], [libmnl/libmnl.h])
-#AST_EXT_LIB_CHECK([VEVS], [vocal-evs], [vevs_enc], [vocal-evs/evs.h])
+
+
 
 PG_CONFIG=":"
 if test "${USE_PGSQL}" != "no"; then
