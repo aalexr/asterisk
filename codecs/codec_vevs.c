@@ -31,6 +31,11 @@
 #include "asterisk/slin.h"
 #include "ex_vevs.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-function"
+
+#if 0
 // minimum set of defines to make mockup happy
 #define EVS_BW_NB  0u
 #define EVS_BW_WB  1u
@@ -41,9 +46,7 @@
 
 #define BUFFER_SAMPLES	5760
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-variable"
-#pragma GCC diagnostic ignored "-Wunused-function"
+
 
 typedef unsigned char uint8;
 typedef unsigned short uint16;
@@ -172,6 +175,10 @@ static void maybe_unload_codeclib(void) {
     w_close_vocal();
   }
 }
+#else
+#define maybe_load_codeclib()
+#define maybe_unload_codeclib()
+#endif
 
 enum CMR_T_000 {
   NB_5_9_VBR_ = 0b0000,
@@ -673,10 +680,12 @@ static void pr_TOC(unsigned char C) {
 
 typedef struct evs_enc_ctx_t{
 	void* vdata;
+  int sock;
 } evs_enc_ctx_t;
 
 typedef struct evs_dec_ctx_t{
 	void* vdata;
+  int sock;
 } evs_dec_ctx_t;
 
 struct evs_enc_pvt {
@@ -691,6 +700,7 @@ struct evs_dec_pvt {
 	int chunk;			/* Size of chunk to decode (in samples) */
 };
 
+#if 0
 static int wrap_vocal_evs_init_coder(evs_enc_ctx_t *ctx, uint16 bandwidth, uint16 sampling_frequency, uint32 bitrate,
                                      vbool dtx_enable) {
   ctx->vdata = vocal_allocate_data();
@@ -736,13 +746,142 @@ static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
   vocal_destroy_data(ctx->vdata);
   return 0;
 }
+#else
+#include <sys/socket.h>
+#include <sys/un.h>
+
+static int codec_init_conn(int *sock) {
+  int ret = -1;
+  int ret_retry_counter = 0;
+  struct sockaddr_un name;
+  memset(&name, 0, sizeof(struct sockaddr_un));
+  name.sun_family = AF_UNIX;
+  strncpy(name.sun_path, SOCKET_NAME, sizeof(name.sun_path) - 1);
+
+  *sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+  if (*sock == -1) {
+    perror("socket");
+    return -1;
+  }
+
+  struct timeval tv = {.tv_sec = 0, .tv_usec = 100 * 1000};
+  ret = setsockopt(*sock, SOL_SOCKET, SO_RCVTIMEO, (const void *)&tv, sizeof(tv));
+  if (ret == -1) { perror("sso"); }
+  ret = setsockopt(*sock, SOL_SOCKET, SO_SNDTIMEO, (const void *)&tv, sizeof(tv));
+  if (ret == -1) { perror("sso"); }
+
+  // fcntl(ctx->sock, F_SETFL, fcntl(ctx->sock, F_GETFL, 0) | O_NONBLOCK);
+  ret = connect(*sock, (const struct sockaddr *)&name, sizeof(struct sockaddr_un));
+  while (ret != 0 && ret_retry_counter < 20) {
+    ret_retry_counter++;
+    // usleep(100000);
+    ret = connect(*sock, (const struct sockaddr *)&name, sizeof(struct sockaddr_un));
+  }
+  if (ret < 0) {
+    perror("connect");
+    close(*sock);
+    return -1;
+    // return EXIT_FAILURE;
+  }
+  // fcntl(ctx->sock, F_SETFL, fcntl(ctx->sock, F_GETFL, 0) & ~O_NONBLOCK);
+  return ret;
+}
+
+static int codec_sndrcv(int sock, Codec_Message *m) {
+  int ret = -1;
+  do {
+    ret = send(sock, (void *)m, sizeof(Codec_Message), MSG_NOSIGNAL);
+  } while (ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK));
+  if (ret == -1) {
+    perror("send");
+    close(sock);
+    return -1;
+  }
+
+  if (m->type == MSG_TYPE_DEALLOC_D || m->type == MSG_TYPE_DEALLOC_E) return 0;
+
+  do {
+    ret = recv(sock, (void *)m, sizeof(Codec_Message), MSG_NOSIGNAL);
+  } while (ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK));
+  if (ret == -1) {
+    perror("recv");
+    close(sock);
+    return -1;
+  }
+
+  return m->ret;
+}
+
+static int wrap_vocal_evs_init_coder(evs_enc_ctx_t *ctx, uint16 bandwidth, uint16 sampling_frequency, uint32 bitrate,
+				     bool dtx_enable) {
+  if (codec_init_conn(&ctx->sock) != 0) return -1;
+
+  Codec_Message m = {.type = MSG_TYPE_ALLOC_E,
+		     .fpars.init_coder.bandwidth = bandwidth,
+		     .fpars.init_coder.sampling_frequency = sampling_frequency,
+		     .fpars.init_coder.bitrate = bitrate,
+		     .fpars.init_coder.dtx_enable = dtx_enable};
+  return codec_sndrcv(ctx->sock, &m);
+}
+static int wrap_vocal_evs_process_coder(evs_enc_ctx_t *ctx, uint8 *enc_data, uint16 enc_data_size,
+					const sint15 *enc_samples, uint16 sample_count) {
+  Codec_Message m = {.type = MSG_TYPE_PROCESS_E,
+		     .fpars.process_coder.enc_data = enc_data,
+		     .fpars.process_coder.enc_data_size = enc_data_size,
+		     .fpars.process_coder.enc_samples = enc_samples,
+		     .fpars.process_coder.sample_count = sample_count};
+  memcpy(m.data.b, enc_samples, sample_count * sizeof(sint15));
+  int rv = codec_sndrcv(ctx->sock, &m);
+  if (rv > 0) memcpy(enc_data, m.data.b, rv / 8);
+  return rv;
+}
+static int wrap_vocal_evs_close_coder(evs_enc_ctx_t *ctx) {
+  Codec_Message m = {.type = MSG_TYPE_DEALLOC_E};
+  int r = codec_sndrcv(ctx->sock, &m);
+  if (r) close(ctx->sock);
+  return r;
+}
+
+static int wrap_vocal_evs_init_decoder(evs_dec_ctx_t *ctx, uint16 sampling_frequency) {
+  if (codec_init_conn(&ctx->sock) != 0) return -1;
+
+  Codec_Message m = {
+      .type = MSG_TYPE_ALLOC_D,
+      .fpars.init_decoder.sampling_frequency = sampling_frequency,
+  };
+  return codec_sndrcv(ctx->sock, &m);
+}
+
+static int wrap_vocal_evs_process_decoder(evs_dec_ctx_t *ctx, sint15 *dec_samples, uint16 max_sample_count,
+					  uint8 *dec_data, uint16 dec_data_size, bool bad_frame) {
+  Codec_Message m = {
+      .type = MSG_TYPE_PROCESS_D,
+      .fpars.process_decoder.dec_samples = dec_samples,
+      .fpars.process_decoder.max_sample_count = max_sample_count,
+      .fpars.process_decoder.dec_data = dec_data,
+      .fpars.process_decoder.dec_data_size = dec_data_size,
+      .fpars.process_decoder.bad_frame = bad_frame,
+  };
+  if (dec_data_size) memcpy(m.data.b, dec_data, dec_data_size / 8);
+  int rv = codec_sndrcv(ctx->sock, &m);
+  memcpy(dec_samples, m.data.b, rv * sizeof(short));
+  return rv;
+}
+
+static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
+  Codec_Message m = {.type = MSG_TYPE_DEALLOC_D};
+  int r = codec_sndrcv(ctx->sock, &m);
+  if (r) close(ctx->sock);
+  return r;
+}
+#endif
 
 /* Create and destroy codec intances */
 
 static int evs_enc_new(struct ast_trans_pvt *pvt) {
   struct evs_enc_pvt *enc = pvt->pvt;
   const unsigned int sample_rate = pvt->t->src_codec.sample_rate;
-  struct evs_attr *attr = pvt->explicit_dst ? ast_format_get_attribute_data(pvt->explicit_dst) : NULL;
+  // struct evs_attr *attr = pvt->explicit_dst ? ast_format_get_attribute_data(pvt->explicit_dst) : NULL;
   int rc;
 
   memset(enc, 0, sizeof(*enc));
