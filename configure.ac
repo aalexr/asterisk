@@ -2422,8 +2422,8 @@ AST_EXT_LIB_CHECK([BLUETOOTH], [bluetooth], [ba2str], [bluetooth/bluetooth.h])
 
 AST_EXT_LIB_CHECK([BEANSTALK], [beanstalk], [bs_version], [beanstalk.h])
 
-AST_PKG_CONFIG_CHECK(VEVS, libvevs)
-# AST_EXT_LIB_CHECK([VEVS], [vevs], [vocal_evs_init_coder], [evs/evs.h])
+#AST_PKG_CONFIG_CHECK(VEVS, libvevs)
+AST_EXT_LIB_CHECK([VEVS])
 
 AST_EXT_LIB_CHECK([LIBMNL], [mnl], [mnl_socket_open], [libmnl/libmnl.h])
 
