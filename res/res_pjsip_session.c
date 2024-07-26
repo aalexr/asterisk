@@ -4865,7 +4865,7 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 	}
 
 	/* Handle "200 OK" (UPDATE) during precondition. */
-	if (session->endpoint && session->endpoint->volte && status.code == 200 && pj_strcmp2(&rdata->msg_info.cseq->method.name, "UPDATE")) {
+	if (session->endpoint && session->endpoint->volte && status.code == 200 && !pj_strcmp2(&rdata->msg_info.cseq->method.name, "UPDATE")) {
 		sdp_info = pjsip_rdata_get_sdp_info(rdata);
 		if (sdp_info && sdp_info->sdp) {
 			for (i = 0; i < sdp_info->sdp->media_count; i++) {
