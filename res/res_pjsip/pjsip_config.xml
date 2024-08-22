@@ -1519,6 +1519,12 @@
 				<configOption name="send_aoc" default="no">
 					<synopsis>Send Advice-of-Charge messages</synopsis>
 				</configOption>
+				<configOption name="volte">
+					<synopsis>VoLTE: Perform Voice over LTE SIP registration process.</synopsis>
+				</configOption>
+				<configOption name="dedicated_bearer_up">
+					<synopsis>VoLTE: Do not wait for dedicated bearer status via AMI interface.</synopsis>
+				</configOption>
 			</configObject>
 			<configObject name="auth">
 				<synopsis>Authentication type</synopsis>
@@ -1662,6 +1668,18 @@
 				</configOption>
 				<configOption name="username">
 					<synopsis>Username to use for account</synopsis>
+				</configOption>
+				<configOption name="usim_ami">
+					<synopsis>VoLTE: Switch to perform USIM authentication via AMI interface</synopsis>
+				</configOption>
+				<configOption name="usim_opc">
+					<synopsis>VoLTE: OPC</synopsis>
+				</configOption>
+				<configOption name="usim_k">
+					<synopsis>VoLTE: K</synopsis>
+				</configOption>
+				<configOption name="usim_sqn">
+					<synopsis>VoLTE: SQN</synopsis>
 				</configOption>
 			</configObject>
 			<configObject name="domain_alias">
