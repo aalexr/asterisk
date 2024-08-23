@@ -1681,6 +1681,9 @@
 				<configOption name="usim_sqn">
 					<synopsis>VoLTE: SQN</synopsis>
 				</configOption>
+				<configOption name="usim_xor">
+					<synopsis>VoLTE: Use XOR authentication algorithm</synopsis>
+				</configOption>
 			</configObject>
 			<configObject name="domain_alias">
 				<synopsis>Domain Alias</synopsis>

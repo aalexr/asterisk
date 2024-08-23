@@ -1589,6 +1589,7 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 		ast_debug(1, "Processing Authentication response from SIM\n");
 		/* Registration response from SIM */
 		memcpy(auth->ims_res, response->sim_res, 8);
+		auth->ims_res_len = 8;
 		memcpy(out_ik, response->sim_ik, 16);
 		memcpy(out_ck, response->sim_ck, 16);
 		response->client_state->volte_response = NULL;
@@ -1639,7 +1640,8 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 			goto out;
 		}
 		rc = volte_authenticate(auth->usim_opc, auth->usim_k, auth->usim_sqn, rand, autn,
-					(uint8_t *)auth->ims_res, out_ik, out_ck, out_auts);
+					(uint8_t *)auth->ims_res, &auth->ims_res_len, out_ik, out_ck, out_auts,
+					auth->usim_xor);
 	}
 	if (rc == -EAGAIN) {
 		if (response->client_state->resync_attempted) {
@@ -1658,7 +1660,6 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 		ast_log(LOG_ERROR, "Authentication failed.\n");
 		goto out;
 	}
-	auth->ims_res_len = 8;
 
 	if (volte_set_transport(transport_state, response->old_request, &sec.alg, &sec.ealg,
 				out_ik, pj_strtoul(&sec.spi_c), pj_strtoul(&sec.spi_s),

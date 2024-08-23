@@ -870,10 +870,10 @@ pj_status_t volte_send_authrequest(const char *registration_name, pj_str_t *algo
 }
 
 pj_status_t volte_authenticate(const char *opc_str, const char *k_str, const char *sqn_str, uint8_t *rand,
-			       uint8_t *autn, uint8_t *out_res, uint8_t *out_ik, uint8_t *out_ck, uint8_t *out_auts)
+			       uint8_t *autn, uint8_t *out_res, int *out_res_len, uint8_t *out_ik, uint8_t *out_ck,
+			       uint8_t *out_auts, bool use_xor)
 {
 	uint8_t opc[16], k[16], sqn[6];
-	size_t out_res_len = 8;
 	int rc;
 	pj_status_t status;
 
@@ -887,7 +887,28 @@ pj_status_t volte_authenticate(const char *opc_str, const char *k_str, const cha
 	if (status)
 		return status;
 
-	rc = milenage_check(opc, k, sqn, rand, autn, out_ik, out_ck, out_res, &out_res_len, out_auts);
+	/* Do XOR. See https://osmocom.org/attachments/2780/0001-WIP-Add-support-for-XOR-authentication.patch */
+	if (use_xor) {
+		uint8_t xdout[16];
+		int i;
+
+		/* s1 */
+		for (i = 0; i < 16; i++)
+			xdout[i] = k[i] ^ rand[i];
+		/* s2 */
+		memcpy(out_res, xdout, 16);
+		*out_res_len = 16;
+		/* ck */
+		memcpy(out_ck, xdout+1, 16 - 1);
+		out_ck[15] = xdout[0];
+		/* ik */
+		memcpy(out_ik, xdout+2, 16 - 2);
+		memcpy(out_ik + 14, xdout, 2);
+
+		return PJ_SUCCESS;
+	}
+
+	rc = milenage_check(opc, k, sqn, rand, autn, out_ik, out_ck, out_res, out_res_len, out_auts);
 	if (rc == -1) {
 		ast_log(LOG_ERROR, "Milenage authentication failed.\n");
 		return -EINVAL;

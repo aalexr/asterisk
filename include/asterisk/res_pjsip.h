@@ -632,7 +632,7 @@ struct ast_sip_auth {
 		/*! Authentication password */
 		AST_STRING_FIELD(auth_pass);
 		/*! IMS Authentication password */
-		char ims_res[8];
+		char ims_res[16];
 		int ims_res_len;
 		/*! IMS Authentication cnonce+nc */
 		char ims_cnonce[256];
@@ -653,6 +653,8 @@ struct ast_sip_auth {
 	);
 	/*! Use AMI interface for communication with USIM (instead of emulation) */
 	unsigned int usim_ami;
+	/*! Use XOR algorithm instead of Milenage */
+	unsigned int usim_xor;
 	/*! The time period (in seconds) that a nonce may be reused */
 	unsigned int nonce_lifetime;
 	/*! Used to determine what to use when authenticating */
