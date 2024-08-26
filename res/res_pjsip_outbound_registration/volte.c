@@ -676,8 +676,10 @@ pj_status_t volte_get_security_server(struct ast_sip_transport_state *transport_
 				      struct security_server *sec)
 {
 	pjsip_generic_string_hdr *sec_hdr;
+	struct security_server secs[8];
 	pj_scanner scanner;
-	int i, j;
+	int idx, i, j, q_index;
+	float q_best = 0.0;
 
 	/* Get Security-Server from header. */
 	sec_hdr = pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &STR_SECURITY_SERVER, NULL);
@@ -695,43 +697,44 @@ pj_status_t volte_get_security_server(struct ast_sip_transport_state *transport_
 		return -EINVAL;
 	}
 
-	memset(sec, 0, sizeof(*sec));
+	memset(secs, 0, sizeof(secs));
 
 	/* NOTE: The string to parse must be null-terminated. */
 	pj_scan_init(&scanner, transport_state->volte.security_server, strlen(transport_state->volte.security_server),
 		     0, &on_syntax_error);
 
+	idx = 0;
 	for (;;) {
 		pj_str_t name, value;
 
 		pjsip_parse_param_imp(&scanner, rdata->tp_info.pool, &name, &value, 0);
 
 		if (!pj_stricmp(&name, &STR_Q)) {
-			sec->q = value;
+			secs[idx].q = pj_strtof(&value);
 		} else
 		if (!pj_stricmp(&name, &STR_PROT)) {
-			sec->prot = value;
+			secs[idx].prot = value;
 		} else
 		if (!pj_stricmp(&name, &STR_MOD)) {
-			sec->mod = value;
+			secs[idx].mod = value;
 		} else
 		if (!pj_stricmp(&name, &STR_SPI_C)) {
-			sec->spi_c = value;
+			secs[idx].spi_c = value;
 		} else
 		if (!pj_stricmp(&name, &STR_SPI_S)) {
-			sec->spi_s = value;
+			secs[idx].spi_s = value;
 		} else
 		if (!pj_stricmp(&name, &STR_PORT_C)) {
-			sec->port_c = value;
+			secs[idx].port_c = value;
 		} else
 		if (!pj_stricmp(&name, &STR_PORT_S)) {
-			sec->port_s = value;
+			secs[idx].port_s = value;
 		} else
 		if (!pj_stricmp(&name, &STR_ALG)) {
-			sec->alg = value;
+			secs[idx].alg = value;
 		} else
 		if (!pj_stricmp(&name, &STR_EALG)) {
-			sec->ealg = value;
+			secs[idx].ealg = value;
 		}
 
 		if (pj_scan_is_eof(&scanner))
@@ -740,33 +743,66 @@ pj_status_t volte_get_security_server(struct ast_sip_transport_state *transport_
 		/* Eat semicolon */
 		if (*scanner.curptr == ';')
 			pj_scan_get_char(&scanner);
+
+		/* Eat comma, go to next sec index */
+		if (*scanner.curptr == ',') {
+			pj_scan_get_char(&scanner);
+			if (++idx == 8)
+				break;
+		}
 	}
 	pj_scan_fini(&scanner);
 
-	if (!sec->prot.ptr || !sec->spi_c.ptr || !sec->spi_s.ptr || !sec->port_c.ptr || !sec->port_s.ptr ||
-	    !sec->alg.ptr || !sec->ealg.ptr) {
-		ast_log(LOG_ERROR, "Missing 'Security-Server' elements in REGISTER response. header=\"%.*s\", "
-			"prot=%.*s, spi-c=%.*s, spi-s=%.*s, port-c=%.*s, port-s=%.*s, alg=%.*s, ealg=%.*s",
-			fmt_str(sec_hdr->hvalue), fmt_str(sec->prot), fmt_str(sec->spi_c), fmt_str(sec->spi_s),
-			fmt_str(sec->port_c), fmt_str(sec->port_s), fmt_str(sec->alg), fmt_str(sec->ealg));
+	q_index = -1;
+	for (idx = 0; idx < 8; idx++) {
+		if (!secs[idx].spi_c.ptr && !secs[idx].spi_s.ptr && !secs[idx].port_c.ptr &&
+		    !secs[idx].port_s.ptr && !secs[idx].alg.ptr) {
+			break;
+		}
+		ast_debug(1, "'Security-Server candidate #%d: "
+			  "prot=%.*s, spi-c=%.*s, spi-s=%.*s, port-c=%.*s, port-s=%.*s, alg=%.*s, ealg=%.*s, q=%.1f\n",
+			  idx, fmt_str(secs[idx].prot), fmt_str(secs[idx].spi_c), fmt_str(secs[idx].spi_s),
+			  fmt_str(secs[idx].port_c), fmt_str(secs[idx].port_s), fmt_str(secs[idx].alg),
+			  fmt_str(secs[idx].ealg), secs[idx].q);
+		if (!secs[idx].spi_c.ptr || !secs[idx].spi_s.ptr || !secs[idx].port_c.ptr ||
+		    !secs[idx].port_s.ptr || !secs[idx].alg.ptr) {
+			ast_log(LOG_ERROR, "Missing 'Security-Server' element(s) in REGISTER response.\n");
+			continue;
+		}
+		if (q_index < 0 || secs[idx].q > q_best) {
+			q_best = secs[idx].q;
+			q_index = idx;
+		}
+	}
+	if (q_index < 0) {
+		ast_log(LOG_ERROR, "No candidate in Security-Server header found.\n");
 		return -EINVAL;
 	}
+	ast_debug(1, "'Selecting best candidate #%d: ", q_index);
+	memcpy(sec, &secs[q_index], sizeof(*sec));
 
 	for (i = 0; g_ipsec_alg[i].sip_name; i++) {
-		if (!pj_strncmp2(&sec->alg, g_ipsec_alg[i].sip_name, strlen(g_ipsec_alg[i].sip_name)))
+		if (!pj_strncmp2(&sec->alg, g_ipsec_alg[i].sip_name, strlen(g_ipsec_alg[i].sip_name))) {
 			break;
+		}
 	}
 	if (!g_ipsec_alg[i].kernel_name) {
 		ast_log(LOG_ERROR, "Given 'alg=%.*s' in Security-Server header not found.\n", fmt_str(sec->alg));
 		return -EINVAL;
 	}
-	for (j = 0; g_ipsec_ealg[j].sip_name; j++) {
-		if (!pj_strncmp2(&sec->ealg, g_ipsec_ealg[j].sip_name, strlen(g_ipsec_ealg[j].sip_name)))
-			break;
-	}
-	if (!g_ipsec_ealg[j].kernel_name) {
-		ast_log(LOG_ERROR, "Given 'ealg=%.*s' in Security-Server header not found.\n", fmt_str(sec->ealg));
-		return -EINVAL;
+	if (sec->ealg.slen) {
+		for (j = 0; g_ipsec_ealg[j].sip_name; j++) {
+			if (!pj_strncmp2(&sec->ealg, g_ipsec_ealg[j].sip_name, strlen(g_ipsec_ealg[j].sip_name))) {
+				break;
+			}
+		}
+		if (!g_ipsec_ealg[j].kernel_name) {
+			ast_log(LOG_ERROR, "Given 'ealg=%.*s' in Security-Server header not found.\n", fmt_str(sec->ealg));
+			return -EINVAL;
+		}
+	} else {
+		ast_log(LOG_NOTICE, "No 'ealg' in security-Server header found, assuming 'null'.\n");
+		pj_cstr(&sec->ealg, "null");
 	}
 
 	return PJ_SUCCESS;

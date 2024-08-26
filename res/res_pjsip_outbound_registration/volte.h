@@ -3,7 +3,7 @@
 #include "netlink_xfrm.h"
 
 struct security_server {
-	pj_str_t q;
+	float q;
 	pj_str_t prot;
 	pj_str_t mod;
 	pj_str_t spi_c;
