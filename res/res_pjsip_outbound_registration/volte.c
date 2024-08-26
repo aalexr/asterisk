@@ -1021,7 +1021,7 @@ pj_status_t volte_get_p_associated_uri(struct ast_sip_transport_state *transport
 	/* Get P-Associated-URI from header. */
 	pau_hdr = pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &STR_P_ASSOCIATED_URI, NULL);
 	if (!pau_hdr || !pau_hdr->hvalue.ptr) {
-		ast_log(LOG_ERROR, "Missing 'P-Associated-URI' in REGISTER response.");
+		ast_log(LOG_NOTICE, "Missing 'P-Associated-URI' in REGISTER response.");
 		return -EINVAL;
 	}
 

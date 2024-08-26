@@ -1718,9 +1718,23 @@ static int store_volte_p_associated_uri(struct registration_response *response)
 		goto out;
 	ao2_lock(transport_state);
 
-	volte_get_p_associated_uri(transport_state, response->rdata);
+	ret = volte_get_p_associated_uri(transport_state, response->rdata);
+	if (ret) {
+		/* Use 'client_uri' if no 'P-Associated-URI' header is given. */
+		struct sip_outbound_registration *reg = NULL;
 
-	ret = 0;
+		if ((reg = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "registration",
+				response->client_state->registration_name))) {
+			ast_log(LOG_NOTICE, "Using 'client_uri' for outgoing calls.");
+			if (strlen(reg->client_uri) < sizeof(transport_state->volte.p_associated_uri)) {
+				strcpy(transport_state->volte.p_associated_uri, reg->client_uri);
+				ret = 0;
+			} else {
+				ast_log(LOG_ERROR, "'client_uri' too large.");
+			}
+			ao2_cleanup(reg);
+		}
+	}
 
 out:
 	if (transport_state)
