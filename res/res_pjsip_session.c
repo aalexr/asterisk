@@ -5661,6 +5661,8 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 					volte_confirm_sdp_qos(&session->qos_status[streams]);
 				}
 			}
+			if (session->endpoint->bw_value)
+				volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams], session->endpoint->bw_value);
 			volte_add_sdp_qos(inv->pool_prov, local->media[streams], &session->qos_status[streams]);
 		}
 
