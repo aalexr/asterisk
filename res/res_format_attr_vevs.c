@@ -818,7 +818,7 @@ static evs_attr default_attrib = {
 	// SET_E_AT(ftmp_hf_only, 1)
 	SET_E_ATR1(ftmp_range_br, DEF_ftmp_br5_9)
 	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwwb)
-	SET_E_AT(ftmp_dtx, 1)
+	//SET_E_AT(ftmp_dtx, 1)
 	SET_E_AT(ftmp_max_red, 0)
 };
 

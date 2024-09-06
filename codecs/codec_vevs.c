@@ -885,7 +885,7 @@ static int evs_enc_new(struct ast_trans_pvt *pvt) {
   int rc;
 
   memset(enc, 0, sizeof(*enc));
-  rc = wrap_vocal_evs_init_coder(&enc->enc, EVS_BW_WB, EVS_SF_16K, EVS_BR_5k90, true);
+  rc = wrap_vocal_evs_init_coder(&enc->enc, EVS_BW_WB, EVS_SF_16K, EVS_BR_5k90, false);
   if (rc <= 0) {
     ast_log(LOG_ERROR, "Error creating the Vocal EVS encoder\n");
     return -1;
