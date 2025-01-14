@@ -2717,7 +2717,9 @@ static int sip_outbound_registration_perform(void *data)
 	pjsip_regc_update_expires(state->client_state->client, registration->expiration);
 
 	/* n mod 0 is undefined, so don't let that happen */
-	schedule_registration(state->client_state, (max_delay ? ast_random() % max_delay : 0) + 1);
+#warning hacking
+//	schedule_registration(state->client_state, (max_delay ? ast_random() % max_delay : 0) + 1);
+	schedule_registration(state->client_state, 1);
 
 	ao2_ref(registration, -1);
 	ao2_ref(state, -1);
