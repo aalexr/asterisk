@@ -1376,6 +1376,8 @@ static void cancel_sim_timer(struct registration_response *response)
 {
 	if (pj_timer_heap_cancel_if_active(pjsip_endpt_get_timer_heap(ast_sip_get_pjsip_endpoint()),
 		&response->sim_timer, response->sim_timer.id)) {
+		/* The timer was successfully cancelled, drop the refcount of response. */
+		ao2_ref(response, -1);
 	}
 }
 
@@ -1711,8 +1713,10 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 			volte_send_authrequest(response->client_state->registration_name, &algo, rand, autn);
 			response->client_state->volte_response = response;
 			volte_set_state(response->client_state, VOLTE_STATE_SIM_REQUEST);
+			ao2_ref(response, +1);
 			if (pjsip_endpt_schedule_timer(ast_sip_get_pjsip_endpoint(), &response->sim_timer, &delay) != PJ_SUCCESS) {
 				ast_log(LOG_WARNING, "Failed to schedule SIM response timer\n");
+				ao2_ref(response, -1);
 				goto out;
 			}
 			ret = 0;
