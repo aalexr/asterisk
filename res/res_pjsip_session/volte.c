@@ -753,22 +753,6 @@ pj_status_t volte_update_sdp_qos(struct ast_sip_session_qos_status *local_status
 	return PJ_SUCCESS;
 }
 
-pj_bool_t volte_is_supported_precondition(pjsip_rx_data *rdata)
-{
-	pjsip_supported_hdr *sup_hdr = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_SUPPORTED, NULL);
-	int i;
-
-	if (!sup_hdr)
-		return PJ_FALSE;
-
-	for (i = 0; i < sup_hdr->count; i++) {
-		if (!pj_stricmp2(&sup_hdr->values[i], "precondition"))
-			return PJ_TRUE;
-	}
-
-	return PJ_FALSE;
-}
-
 static const pj_str_t STR_BW = DEF_STR("bw=nb-wb");
 
 pj_status_t hack_evs(pjmedia_sdp_media *media)

@@ -4273,13 +4273,6 @@ static int new_invite(struct new_invite *invite)
 		invite->session->exten);
 	ast_sip_session_send_response(invite->session, tdata);
 
-	/* Setting state to "MT_COMPLETE", so that SDP is not generated with QOS attributes. */
-	if (!volte_is_supported_precondition(invite->rdata)) {
-		ast_debug(1, "%s: Precondition is not supported for MT call.\n",
-			  ast_sip_session_get_name(invite->session));
-		invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
-	}
-
 	sdp_info = pjsip_rdata_get_sdp_info(invite->rdata);
 	if (sdp_info && (sdp_info->sdp_err == PJ_SUCCESS) && sdp_info->sdp) {
 		if (handle_incoming_sdp(invite->session, sdp_info->sdp)) {
@@ -4315,19 +4308,17 @@ static int new_invite(struct new_invite *invite)
 	}
 #endif
 
-	if (invite->session->endpoint->volte &&
-	    invite->session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
+	if (invite->session->endpoint->volte) {
 		pjsip_tx_data *packet = NULL;
 
-		if (!volte_is_supported_precondition(invite->rdata)) {
-			ast_debug(1, "%s: Precondition is not supported for MT call.\n",
-				  ast_sip_session_get_name(invite->session));
+		if (pjsip_inv_answer(invite->session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
+	                ast_sip_session_send_response(invite->session, packet);
+		if (!invite->session->endpoint->precondition) {
+			ast_debug(1, "%s: Precondition is disabled.\n", ast_sip_session_get_name(invite->session));
 			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
 		} else {
 			int i;
 
-			if (pjsip_inv_answer(invite->session->inv_session, 183, NULL, NULL, &packet) == PJ_SUCCESS)
-		                ast_sip_session_send_response(invite->session, packet);
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
 				  ast_sip_session_get_name(invite->session));
 			for (i = 0; i < PJMEDIA_MAX_SDP_MEDIA; i++) {
