@@ -4621,7 +4621,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 			volte_add_p_preferred_service(tdata, "urn:urn-7:3gpp-service.ims.icsi.mmtel");
 
 			/* Add Supported: precondition */
-			if (volte_add_precondition(tdata, PJ_TRUE)) {
+			if (session->endpoint->precondition && volte_add_precondition(tdata, PJ_TRUE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
 
@@ -4637,7 +4637,7 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 		}
 		if (!pj_strcmp2(&tdata->msg->line.req.method.name, "UPDATE")) {
 			/* Add Require: precondition */
-			if (volte_add_precondition(tdata, PJ_FALSE)) {
+			if (session->endpoint->precondition && volte_add_precondition(tdata, PJ_FALSE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
 			/* Add parameters to Contact header. */
@@ -4897,7 +4897,10 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 				}
 			}
 		}
-		if (session->dedicated_bearer_up) {
+		if (!session->endpoint->precondition) {
+			ast_debug(1, "%s: Precondition is disabled.\n", ast_sip_session_get_name(session));
+			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_COMPLETE;
+		} else if (session->dedicated_bearer_up) {
 			/* AMI already reported that dedicated bearer is up */
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
 				  ast_sip_session_get_name(session));
@@ -5055,7 +5058,7 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 			ast_log(LOG_ERROR, "Failed to add P-Access-Network-info header.\n");
 		}
 
-		if (status.code == 183 && volte_add_precondition(tdata, PJ_FALSE)) {
+		if (status.code == 183 && session->endpoint->precondition && volte_add_precondition(tdata, PJ_FALSE)) {
 			ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 		}
 
@@ -5071,7 +5074,7 @@ static void handle_outgoing_response(struct ast_sip_session *session, pjsip_tx_d
 
 		/* Add "precondition" to Require header. */
 		if (!pj_strcmp2(&cseq->method.name, "UPDATE")) {
-			if (volte_add_precondition(tdata, PJ_FALSE)) {
+			if (session->endpoint->precondition && volte_add_precondition(tdata, PJ_FALSE)) {
 				ast_log(LOG_ERROR, "Failed to add precondition header.\n");
 			}
 		}
@@ -5741,7 +5744,10 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 		}
 
 		/* Add QOS and Bandwidth attributes to each media. */
+		if (session->endpoint->bw_value)
+			volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams], session->endpoint->bw_value);
 		if (session->endpoint->volte &&
+		    session->endpoint->precondition &&
 		    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MO_COMPLETE &&
 		    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
 			/* On offer, do negotiation and then add QOS attributes. */
@@ -5753,8 +5759,6 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 					volte_confirm_sdp_qos(&session->qos_status[streams]);
 				}
 			}
-			if (session->endpoint->bw_value)
-				volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams], session->endpoint->bw_value);
 			volte_add_sdp_qos(inv->pool_prov, local->media[streams], &session->qos_status[streams]);
 		}
 		if (session->endpoint->hack_evs && session->precondition_state == AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE)

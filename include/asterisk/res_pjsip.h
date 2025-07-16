@@ -1141,6 +1141,8 @@ struct ast_sip_endpoint {
 	unsigned int bw_value;
 	/*! \brief EVS hack */
 	unsigned int hack_evs;
+	/*! \brief Turn off precondition (VoWiFi) */
+	unsigned int precondition;
 };
 
 /*! URI parameter for symmetric transport */

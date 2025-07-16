@@ -1539,6 +1539,9 @@
 				<configOption name="hack_evs">
 					<synopsis>VoLTE: Internal debugging feature.</synopsis>
 				</configOption>
+				<configOption name="precondition">
+					<synopsis>VoLTE: Turn off precondition. This is not required for VoWiFi.</synopsis>
+				</configOption>
 			</configObject>
 			<configObject name="auth">
 				<synopsis>Authentication type</synopsis>
