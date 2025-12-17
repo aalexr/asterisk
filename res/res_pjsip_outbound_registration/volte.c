@@ -54,6 +54,7 @@ const struct ipsec_alg g_ipsec_ealg[] = {
 /* This list has only one entry. It is used when encryption is diabled. */
 const struct ipsec_alg g_ipsec_ealg_null[] = {
 	{ "null", "cipher_null" },
+	{ "aes-cbc", "aes" },
 	{ NULL, NULL }
 };
 
@@ -275,8 +276,15 @@ static pj_status_t volte_set_xfrm(struct ast_sip_transport_state *transport_stat
 	case 1:  // null
 		ciph_algo.algo.alg_key_len = 0;
 		break;
+	case 2:
+		memcpy(ciph_algo.algo.alg_key, ck, 16);
+		ciph_algo.algo.alg_key_len = 128;
+		break;
 	}
 
+	ast_debug(1, "xfrm: crypto key: 0x%02x%02x%02x%02x\n",
+		  (uint8_t)ciph_algo.algo.alg_key[0], (uint8_t)ciph_algo.algo.alg_key[1],
+		  (uint8_t)ciph_algo.algo.alg_key[2], (uint8_t)ciph_algo.algo.alg_key[3]);
 	copy_pj_sockaddr_to_sockaddr_storage(&transport_state->volte.local_addr_c, &local_addr_c);
 	copy_pj_sockaddr_to_sockaddr_storage(&transport_state->volte.remote_addr_c, &remote_addr_c);
 	copy_pj_sockaddr_to_sockaddr_storage(&transport_state->volte.local_addr_s, &local_addr_s);
