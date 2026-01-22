@@ -88,8 +88,9 @@
  * * AST_SIP_SESSION_PRECONDITION_MO_COMPLETE
  *
  * This state is entered, if dedicated bearer is already up or when UPDATE has
- * been acknowledged by remote peer.
- *
+ * been acknowledged by remote peer. Also it is entered, if precondition is not
+ * required, so that the call handling proceeds without waiting for dedicated
+ * bearer.
  *
  * A MT call has teh following precondition states
  *
@@ -106,7 +107,8 @@
  * * AST_SIP_SESSION_PRECONDITION_MT_COMPLETE
  *
  * This state is entered, after UPDATE OK has been sent and the dedicated
- * bearer is up.
+ * bearer is up. Also it is entered, if precondition is not supported, so that
+ * the call handling proceeds without waiting for dedicated bearer.
  *
  *
  * When the state becomes up, a call in
@@ -119,7 +121,7 @@
  *
  *
  * If precondition is not required (MO) or supported (MT), UPDATE states are
- * skipped, but waiting for dedicated bearer still applies.
+ * skipped.
  */
 
 /* Some forward declarations */
@@ -4349,16 +4351,11 @@ static int new_invite(struct new_invite *invite)
 			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
 				  ast_sip_session_get_name(invite->session));
 			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE;
-		} else if (invite->session->dedicated_bearer_up || invite->session->endpoint->dedicated_bearer_up) {
-			/* Dedicated bearer is already up, so preconditon state is now complete. */
-			ast_debug(1, "%s: Precondition state is complete.\n",
+		} else {
+			/* Precondition is not supported, so proceed without waiting for dedicated bearer. */
+			ast_debug(1, "%s: Precondition state is complete, because precondition is not required.\n",
 				  ast_sip_session_get_name(invite->session));
 			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_COMPLETE;
-		} else {
-			/* Dedicated bearer is not up yet, so wait for the bearer. */
-			ast_debug(1, "%s: Precondition state is waiting for dedicaed bearer.\n",
-				  ast_sip_session_get_name(invite->session));
-			invite->session->precondition_state = AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER;
 		}
 	}
 
@@ -4961,19 +4958,17 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 				}
 			}
 		}
-		if (session->dedicated_bearer_up) {
+		if (!session->precondition_required) {
+			/* Precondition is not required, use the MO_COMPLETE state to skip UPDATE procedure. */
+			ast_debug(1, "%s: Precondition state is complete, because it is not required.\n",
+				  ast_sip_session_get_name(session));
+			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_COMPLETE;
+		} else if (session->dedicated_bearer_up) {
 			/* AMI already reported that dedicated bearer is up */
-			if (session->precondition_required) {
-				/* Send UPDATE now and enter MO_UPDATE state. */
-				ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
-					  ast_sip_session_get_name(session));
-				session_precondition_send_update(session);
-			} else {
-				/* Dedicated bearer is up, use the MO_COMPLETE state to skip UPDATE procedure. */
-				ast_debug(1, "%s: Precondition state is complete.\n",
-					  ast_sip_session_get_name(session));
-				session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_COMPLETE;
-			}
+			/* Send UPDATE now and enter MO_UPDATE state. */
+			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
+				  ast_sip_session_get_name(session));
+			session_precondition_send_update(session);
 		} else if (session->endpoint->dedicated_bearer_up) {
 			int res;
 			/* Automatically set dedicated bearer to up after given time */
