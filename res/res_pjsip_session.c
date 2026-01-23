@@ -4993,7 +4993,7 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 	/* VoLTE: Do not forward 183 responses during SDP/QoS negotiation.
 	 * A 183 response with no SDP will indicate early audio. This one is forwarded. */
 	if (session->endpoint && session->endpoint->volte && status.code == 183 && session->precondition_required) {
-		ast_debug(1, "%s: Precondition is not required, so forwarding 'Session Progress' toward core.\n",
+		ast_debug(1, "%s: Precondition is required, so do not forward this 'Session Progress' towards core.\n",
 			  ast_sip_session_get_name(session));
 		goto out;
 	}
