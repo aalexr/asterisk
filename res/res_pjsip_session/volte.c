@@ -762,32 +762,39 @@ pj_status_t volte_update_sdp_qos(struct ast_sip_session_qos_status *local_status
 
 pj_bool_t volte_is_require_precondition(pjsip_rx_data *rdata)
 {
+	pjsip_require_hdr *require;
         int i;
 
-        if (!rdata->msg_info.require)
-                return PJ_FALSE;
-
-        for (i = 0; i < rdata->msg_info.require->count; i++) {
-                if (!pj_stricmp2(&rdata->msg_info.require->values[i], "precondition")) {
-                        return PJ_TRUE;
-                }
-        }
+	require = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_REQUIRE, NULL);
+	while (require) {
+		for (i = 0; i < require->count; i++) {
+			if (!pj_stricmp2(&require->values[i], "precondition")) {
+				return PJ_TRUE;
+			}
+		}
+		require = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_REQUIRE, require->next);
+	}
 
         return PJ_FALSE;
 }
 
 pj_bool_t volte_is_supported_precondition(pjsip_rx_data *rdata)
 {
+	pjsip_supported_hdr *supported;
         int i;
 
         if (!rdata->msg_info.supported)
                 return PJ_FALSE;
 
-        for (i = 0; i < rdata->msg_info.supported->count; i++) {
-                if (!pj_stricmp2(&rdata->msg_info.supported->values[i], "precondition")) {
-                        return PJ_TRUE;
-                }
-        }
+	supported = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_SUPPORTED, NULL);
+	while (supported) {
+		for (i = 0; i < supported->count; i++) {
+			if (!pj_stricmp2(&supported->values[i], "precondition")) {
+				return PJ_TRUE;
+			}
+		}
+		supported = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_SUPPORTED, supported->next);
+	}
 
         return PJ_FALSE;
 }
