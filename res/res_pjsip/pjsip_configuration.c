@@ -2299,6 +2299,7 @@ int ast_res_pjsip_initialize_configuration(void)
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "security_negotiation", "no", security_negotiation_handler, security_negotiation_to_str, NULL, 0, 0);
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "send_aoc", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, send_aoc));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "volte", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, volte));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "precondition_supported", "yes", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, precondition_supported));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "dedicated_bearer_up", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, dedicated_bearer_up));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "dedicated_bearer_up_delayms", "500", OPT_UINT_T, 0, FLDSET(struct ast_sip_endpoint, dedicated_bearer_up_delayms));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "bw_value", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_endpoint, bw_value));

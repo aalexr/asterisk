@@ -2990,8 +2990,26 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 
 	SCOPE_ENTER(1, "%s\n", ast_sip_session_get_name(session));
 
+	if (volte) {
+		if (session->endpoint->precondition_supported) {
+			ast_debug(1, "%s: Precondition state is waiting for \"183 Session Progress\".\n",
+				  ast_sip_session_get_name(session));
+			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_WAIT_PROGRESS;
+		} else {
+			ast_debug(1, "%s: Precondition state is disabled by config.\n",
+				  ast_sip_session_get_name(session));
+			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_COMPLETE;
+		}
+		if (get_transport_transport_state(session->endpoint, NULL, &transport_state)) {
+			SCOPE_EXIT_RTN_VALUE(-1, "Failed to get transport state\n");
+		}
+		ao2_lock(transport_state);
+	}
+
 	if (!(offer = create_local_sdp(session->inv_session, session, NULL, 0, PJ_FALSE, PJ_TRUE))) {
 		pjsip_inv_terminate(session->inv_session, 500, PJ_FALSE);
+		if (transport_state)
+			ao2_unlock(transport_state);
 		SCOPE_EXIT_RTN_VALUE(-1, "Couldn't create offer\n");
 	}
 
@@ -3002,16 +3020,6 @@ int ast_sip_session_create_invite(struct ast_sip_session *session, pjsip_tx_data
 		pjmedia_sdp_neg_set_answer_multiple_codecs(session->inv_session->neg, PJ_TRUE);
 	}
 #endif
-
-	if (volte) {
-		ast_debug(1, "%s: Precondition state is waiting for \"183 Session Progress\".\n",
-			  ast_sip_session_get_name(session));
-		session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_WAIT_PROGRESS;
-		if (get_transport_transport_state(session->endpoint, NULL, &transport_state)) {
-			SCOPE_EXIT_RTN_VALUE(-1, "Failed to get transport state\n");
-		}
-		ao2_lock(transport_state);
-	}
 
 	/*
 	 * We MUST call set_from_header() before pjsip_inv_invite.  If we don't, the
@@ -4642,9 +4650,11 @@ static pj_status_t session_on_tx_request(pjsip_tx_data *tdata)
 			/* P-Preferred-Service: GSMA FCM.01 3.2.3.3 */
 			volte_add_p_preferred_service(tdata, "urn:urn-7:3gpp-service.ims.icsi.mmtel");
 
-			/* Add "precondition" to Supported header. */
-			if (volte_add_supported_precondition(tdata)) {
-				ast_log(LOG_ERROR, "Failed to add precondition to 'Supported' header.\n");
+			if (session->endpoint->precondition_supported) {
+				/* Add "precondition" to Supported header. */
+				if (volte_add_supported_precondition(tdata)) {
+					ast_log(LOG_ERROR, "Failed to add precondition to 'Supported' header.\n");
+				}
 			}
 
 			/* Add P-Early-Media: supported */

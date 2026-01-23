@@ -1140,6 +1140,8 @@ struct ast_sip_endpoint {
 	unsigned int send_aoc;
 	/*! \brief VoLTE support */
 	unsigned int volte;
+	/*! Flag to declare if precondition is supported at all */
+	unsigned int precondition_supported;
 	/*! Flag to declare dedicated as up, even if not set via AMI interface */
 	unsigned int dedicated_bearer_up;
 	/*! Time to delay until sending update. */

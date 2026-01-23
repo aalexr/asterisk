@@ -1522,6 +1522,9 @@
 				<configOption name="volte">
 					<synopsis>VoLTE: Perform Voice over LTE SIP registration process.</synopsis>
 				</configOption>
+				<configOption name="precondition_supported">
+					<synopsis>VoLTE: Say 'no' to disable precondition support. This is for testing only.</synopsis>
+				</configOption>
 				<configOption name="dedicated_bearer_up">
 					<synopsis>VoLTE: Do not wait for dedicated bearer status via AMI interface.</synopsis>
 				</configOption>
