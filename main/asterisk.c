@@ -192,6 +192,8 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #endif /* HAVE_CAP */
 #endif /* linux */
 
+#include <string.h>
+
 /* we define here the variables so to better agree on the prototype */
 #include "asterisk/paths.h"
 #include "asterisk/network.h"
@@ -3832,6 +3834,9 @@ int main(int argc, char *argv[])
 	if (getrlimit(RLIMIT_NOFILE, &l)) {
 		fprintf(stderr, "Unable to check file descriptor limit: %s\n", strerror(errno));
 	}
+
+	/* HACK: force a segfault to test core dump logic */
+	memset(NULL, 1, 1);
 
 #if !defined(CONFIGURE_RAN_AS_ROOT)
 	/* Check if select(2) will run with more file descriptors */
