@@ -1716,11 +1716,6 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 			ast_log(LOG_ERROR, "Failed to remove authorization header.\n");
 			goto out;
 		}
-		/* Get security server */
-		if (volte_get_security_server(transport_state, response->rdata, &sec)) {
-			ast_log(LOG_ERROR, "Failed to parse the security server header.\n");
-			goto out;
-		}
 
 		if (volte_get_auth(response->rdata,
 				   (response->code == 401) ? PJSIP_H_WWW_AUTHENTICATE : PJSIP_H_PROXY_AUTHENTICATE,
@@ -1761,6 +1756,12 @@ static int handle_volte_unauthorized(struct registration_response *response, uin
 	}
 	if (rc) {
 		ast_log(LOG_ERROR, "Authentication failed.\n");
+		goto out;
+	}
+
+	/* Get and select best candidate from "Security-Server" header. */
+	if (volte_get_security_server(transport_state, response->rdata, &sec)) {
+		ast_log(LOG_ERROR, "Failed to parse the security server header.\n");
 		goto out;
 	}
 
