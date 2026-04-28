@@ -3766,7 +3766,7 @@ static int load_module(void)
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "volte", "no", OPT_BOOL_T, 1, FLDSET(struct sip_outbound_registration, volte));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "imei", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct sip_outbound_registration, imei));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "accesstype", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct sip_outbound_registration, accesstype));
-	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "receive_sms", "yes", OPT_BOOL_T, 1, FLDSET(struct sip_outbound_registration, receive_sms));
+	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "registration", "receive_sms", "no", OPT_BOOL_T, 1, FLDSET(struct sip_outbound_registration, receive_sms));
 
 	/*
 	 * Register sorcery observers.
