@@ -6258,58 +6258,23 @@ static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_trans
 	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, session_module.id, MOD_DATA_NAT_HOOK, nat_hook);
 }
 
-static int ami_dedicatedbearerstatus(struct mansession *s, const struct message *m)
+struct dedicated_bearer_task_data {
+        struct ast_sip_session *session;
+        pj_bool_t dedicated_bearer_up;    /* Hier transportieren wir den Status! */
+};
+
+static int session_dedicated_bearer_status(void *obj)
 {
-	const char *status_str = astman_get_header(m, "Status");
-	const char *channel_str = astman_get_header(m, "Channel");
-	pj_bool_t dedicated_bearer_up;
-	struct ast_channel *ast = NULL;
-	struct ast_sip_channel_pvt *channel;
-	struct ast_sip_session *session;
+	struct dedicated_bearer_task_data *data = obj;
+	struct ast_sip_session *session = data->session;
 
-	if (!status_str || !status_str[0]) {
-		ast_log(LOG_ERROR, "DedicatedBearerStatus: Status parameter missing.\n");
-		astman_send_error(s, m, "Status parameter missing");
-		goto out;
-	}
+	session->dedicated_bearer_up = data->dedicated_bearer_up;
 
-	if (!channel_str || !channel_str[0]) {
-		ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel parameter missing.\n");
-		astman_send_error(s, m, "Channel parameter missing");
-		goto out;
-	}
-
-	if (!strcasecmp(status_str, "Up")) {
-		dedicated_bearer_up = PJ_TRUE;
+	if (session->dedicated_bearer_up) {
 		ast_debug(1, "DedicatedBearerStatus: Now Up.\n");
-	} else if (!strcasecmp(status_str, "Down")) {
-		dedicated_bearer_up = PJ_FALSE;
-		ast_debug(1, "DedicatedBearerStatus: Now Down.\n");
 	} else {
-		ast_log(LOG_ERROR, "DedicatedBearerStatus: Status '%s' invalid.\n", status_str);
-		astman_send_error(s, m, "Status parameter invalid");
-		goto out;
+		ast_debug(1, "DedicatedBearerStatus: Now Down.\n");
 	}
-
-	if (!(ast = ast_channel_get_by_name(channel_str)) || !(channel = ast_channel_tech_pvt(ast)) ||
-	    !(session = channel->session)) {
-		/* It is ok to receive a dedicated beaer status of 'down' after the call is gone. */
-		if (dedicated_bearer_up == PJ_FALSE) {
-			astman_send_ack(s, m, "Status updated");
-		} else {
-			ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel not found.\n");
-			astman_send_error(s, m, "Channel not found");
-		}
-		goto out;
-	}
-
-	if (!session->endpoint->volte) {
-		ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel is not a VoLTE channel.\n");
-		astman_send_error(s, m, "Channel is not a VoLTE channel");
-		goto out;
-	}
-
-	session->dedicated_bearer_up = dedicated_bearer_up;
 
 	switch (session->precondition_state) {
 	case AST_SIP_SESSION_PRECONDITION_MO_WAIT_BEARER:
@@ -6336,13 +6301,102 @@ static int ami_dedicatedbearerstatus(struct mansession *s, const struct message 
 		}
 		break;
 	default:
+		break;
+	}
+
+	ao2_ref(session, -1);
+	ast_free(data);
+	return 0;
+}
+
+static int ami_dedicated_bearer_status(struct mansession *s, const struct message *m)
+{
+	const char *status_str = astman_get_header(m, "Status");
+	const char *channel_str = astman_get_header(m, "Channel");
+	pj_bool_t dedicated_bearer_up;
+	struct ast_channel *ast = NULL;
+	struct ast_sip_channel_pvt *channel;
+	struct ast_sip_session *session;
+	struct dedicated_bearer_task_data *task_data;
+
+	if (!status_str || !status_str[0]) {
+		ast_log(LOG_ERROR, "DedicatedBearerStatus: Status parameter missing.\n");
+		astman_send_error(s, m, "Status parameter missing");
+		goto out;
+	}
+
+	if (!channel_str || !channel_str[0]) {
+		ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel parameter missing.\n");
+		astman_send_error(s, m, "Channel parameter missing");
+		goto out;
+	}
+
+	if (!strcasecmp(status_str, "Up")) {
+		dedicated_bearer_up = PJ_TRUE;
+	} else if (!strcasecmp(status_str, "Down")) {
+		dedicated_bearer_up = PJ_FALSE;
+	} else {
+		ast_log(LOG_ERROR, "DedicatedBearerStatus: Status '%s' invalid.\n", status_str);
+		astman_send_error(s, m, "Status parameter invalid");
+		goto out;
+	}
+
+	/* refcount of 'ast' will be incremented, if found. At the end it will be decremented. */
+	if (!(ast = ast_channel_get_by_name(channel_str))) {
+		/* It is ok to receive a dedicated beaer status of 'down' after the call is gone. */
+		if (dedicated_bearer_up == PJ_FALSE) {
+			ast_debug(1, "DedicatedBearerStatus: Now Down, call already gone.\n");
+			astman_send_ack(s, m, "Status updated");
+		} else {
+			ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel not found.\n");
+			astman_send_error(s, m, "Channel not found");
+		}
+		goto out;
+	}
+
+	/* Lock 'ast' while accessing incrementing refcount of 'session'. */
+	ast_channel_lock(ast);
+
+	if (!(channel = ast_channel_tech_pvt(ast)) || !(session = channel->session)) {
+		ast_log(LOG_ERROR, "DedicatedBearerStatus: Session not found.\n");
+		ast_channel_unlock(ast);
+		astman_send_error(s, m, "Session not found");
+		goto out;
+	}
+
+	if (!session->endpoint->volte) {
+		ast_log(LOG_ERROR, "DedicatedBearerStatus: Channel does not belong to a VoLTE endpoint.\n");
+		ast_channel_unlock(ast);
+		astman_send_error(s, m, "Channel does not belong to a VoLTE endpoint");
+		goto out;
+	}
+
+	task_data = ast_calloc(1, sizeof(*task_data));
+	if (!task_data) {
+		ast_log(LOG_ERROR, "Run out of memory.\n");
+		ast_channel_unlock(ast);
+		astman_send_error(s, m, "Internal memory error");
+		goto out;
+	}
+
+	/* Unlock 'ast' before pushing the task. */
+	ao2_ref(session, +1);
+	ast_channel_unlock(ast);
+	task_data->session = session;
+	task_data->dedicated_bearer_up = dedicated_bearer_up;
+	if (ast_sip_push_task(session->serializer, session_dedicated_bearer_status, task_data)) {
+		ast_free(task_data);
+		ao2_ref(session, -1);
+		astman_send_error(s, m, "Internal task error");
+		goto out;
 	}
 
 	astman_send_ack(s, m, "Status updated");
 
 out:
-	if (ast)
+	if (ast) {
 		ast_channel_unref(ast);
+	}
 	return 0;
 }
 
@@ -6928,7 +6982,7 @@ static int load_module(void)
 
 	pjsip_reason_header_load();
 
-	ast_manager_register_xml_core("DedicatedBearerStatus", 0, ami_dedicatedbearerstatus);
+	ast_manager_register_xml_core("DedicatedBearerStatus", 0, ami_dedicated_bearer_status);
 
 	ast_module_shutdown_ref(ast_module_info->self);
 #ifdef TEST_FRAMEWORK
