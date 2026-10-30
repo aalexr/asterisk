@@ -1161,6 +1161,9 @@ const char *volte_add_contact_params(const char *imei, const char *accesstype, p
 		sprintf(strchr(contact, '\0'), ";+g.3gpp.accesstype=\"%s\"", accesstype);
 	if (sms_enabled)
 		sprintf(strchr(contact, '\0'), ";+g.3gpp.smsip");
+	/* PATCH_REG_EXTRAS: SRVCC capability tags in the REGISTER Contact (opt-in). */
+	if (!ast_strlen_zero(getenv("VOWIFI_REG_SRVCC_TAGS")) && strcmp(getenv("VOWIFI_REG_SRVCC_TAGS"), "0"))
+		sprintf(strchr(contact, '\0'), ";+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting");
 
 	return contact;
 }

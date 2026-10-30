@@ -1089,6 +1089,76 @@ out:
 }
 
 /*! \brief Helper function which sends a message and cleans up, if needed, on failure */
+
+/* PATCH_REG_EXTRAS */
+static void volte_add_geolocation(struct sip_outbound_registration_client_state *client_state,
+	pjsip_tx_data *tdata)
+{
+	static const pj_str_t STR_GEOLOCATION = { "Geolocation", 11 };
+	const char *country = getenv("VOWIFI_REG_GEO_COUNTRY");
+	pjsip_to_hdr *to;
+	char entity[256], cid[64], value[96], stamp[32], xml[1536];
+	pj_str_t type, subtype, text;
+	pj_ssize_t len;
+	time_t now;
+	struct tm tm;
+
+	if (!client_state->volte || ast_strlen_zero(country)
+		|| pjsip_method_cmp(&tdata->msg->line.req.method, &pjsip_register_method)) {
+		return;
+	}
+	/* The authenticated REGISTER is cloned from the challenged one: add only once. */
+	if (pjsip_msg_find_hdr_by_name(tdata->msg, &STR_GEOLOCATION, NULL) || tdata->msg->body) {
+		return;
+	}
+
+	to = PJSIP_MSG_TO_HDR(tdata->msg);
+	len = to ? pjsip_uri_print(PJSIP_URI_IN_FROMTO_HDR, pjsip_uri_get_uri(to->uri), entity, sizeof(entity) - 1) : -1;
+	if (len <= 0) {
+		ast_copy_string(entity, "sip:unknown", sizeof(entity));
+	} else {
+		entity[len] = '\0';
+	}
+
+	now = time(NULL);
+	gmtime_r(&now, &tm);
+	strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+	snprintf(cid, sizeof(cid), "loc%08lx@ue.ims", (unsigned long) ast_random());
+
+	snprintf(xml, sizeof(xml),
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"
+		"<presence xmlns=\"urn:ietf:params:xml:ns:pidf\""
+		" xmlns:dm=\"urn:ietf:params:xml:ns:pidf:data-model\""
+		" xmlns:gp=\"urn:ietf:params:xml:ns:pidf:geopriv10\""
+		" xmlns:cl=\"urn:ietf:params:xml:ns:pidf:geopriv10:civicAddr\""
+		" entity=\"%s\">\r\n"
+		"<dm:device id=\"Wifi\">\r\n"
+		"<gp:geopriv>\r\n"
+		"<gp:location-info>\r\n"
+		"<cl:civicAddress>\r\n"
+		"<cl:country>%s</cl:country>\r\n"
+		"</cl:civicAddress>\r\n"
+		"</gp:location-info>\r\n"
+		"<gp:usage-rules/>\r\n"
+		"</gp:geopriv>\r\n"
+		"<dm:timestamp>%s</dm:timestamp>\r\n"
+		"</dm:device>\r\n"
+		"</presence>\r\n",
+		entity, country, stamp);
+
+	snprintf(value, sizeof(value), "<cid:%s>", cid);
+	ast_sip_add_header(tdata, "Geolocation", value);
+	ast_sip_add_header(tdata, "Geolocation-Routing", "yes");
+	snprintf(value, sizeof(value), "<%s>", cid);
+	ast_sip_add_header(tdata, "Content-ID", value);
+
+	pj_cstr(&type, "application");
+	pj_cstr(&subtype, "pidf+xml");
+	pj_strdup2(tdata->pool, &text, xml);
+	tdata->msg->body = pjsip_msg_body_create(tdata->pool, &type, &subtype, &text);
+	ast_debug(1, "VoLTE: added Geolocation (country=%s) to REGISTER\n", country);
+}
+
 static pj_status_t registration_client_send(struct sip_outbound_registration_client_state *client_state,
 	pjsip_tx_data *tdata)
 {
@@ -1114,6 +1184,7 @@ static pj_status_t registration_client_send(struct sip_outbound_registration_cli
 
 	/* Add Security-Verify or Security-Client headers */
 	add_security_headers(client_state, tdata);
+	volte_add_geolocation(client_state, tdata);
 
 	/*
 	 * Set the transport in case transports were reloaded.
