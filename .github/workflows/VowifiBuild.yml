@@ -7,6 +7,10 @@ name: VowifiBuild
 #   linux-x64    Debian bookworm amd64, native runner
 #   rpi-arm64    Debian bookworm arm64, native arm runner
 #                (Raspberry Pi OS 64-bit, Pi 3/4/5/Zero 2 W)
+#
+# The tarballs are kept as workflow artifacts for 90 days. Pushes to a
+# vowifi branch also publish them to a per-branch "build-<branch>"
+# prerelease, which is replaced on every push and does not expire.
 
 on:
   push:
@@ -64,5 +68,35 @@ jobs:
         with:
           name: asterisk-${{ matrix.name }}
           path: out/asterisk-${{ matrix.name }}.tar.gz
-          retention-days: 14
+          retention-days: 90
 
+
+  release:
+    name: Publish release
+    needs: native
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          tag="build-$(echo "$BRANCH" | tr '/' '-')"
+          gh release delete "$tag" --cleanup-tag --yes || true
+          gh release create "$tag" dist/*.tar.gz \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$BRANCH build" \
+            --notes "Automatic build of \`$BRANCH\` at $GITHUB_SHA.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
