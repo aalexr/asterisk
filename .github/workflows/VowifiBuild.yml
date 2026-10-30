@@ -1,0 +1,100 @@
+name: VowifiBuild
+
+# Build the vowifi branch for Linux x64 and Raspberry Pi.
+#
+# All builds run in Debian bookworm containers, the base of the current
+# Raspberry Pi OS, so the Pi builds can be installed directly on a Pi:
+#   linux-x64    Debian bookworm amd64, native runner
+#   rpi-arm64    Debian bookworm arm64, native arm runner
+#                (Raspberry Pi OS 64-bit, Pi 3/4/5/Zero 2 W)
+#   rpi-armhf    Debian bookworm armhf (ARMv7), emulated with QEMU
+#                (Raspberry Pi OS 32-bit on Pi 2/3/4/Zero 2 W)
+
+on:
+  push:
+    branches:
+      - 'vowifi'
+      - 'vowifi/**'
+    paths-ignore:
+      - 'doc/**'
+      - '**.md'
+  pull_request:
+    branches:
+      - 'vowifi'
+      - 'vowifi/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+          - name: rpi-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:bookworm
+    timeout-minutes: 90
+    steps:
+      # Without git in the container actions/checkout falls back to a plain
+      # tarball and the version string ends up as UNKNOWN.
+      - name: Install git
+        run: apt-get update -q && apt-get install -y -q --no-install-recommends git ca-certificates
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history (without blobs) so make_version can git describe.
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Build
+        run: ./.github/scripts/vowifi-build.sh asterisk-${{ matrix.name }}
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: asterisk-${{ matrix.name }}
+          path: out/asterisk-${{ matrix.name }}.tar.gz
+          retention-days: 14
+
+  rpi-armhf:
+    name: rpi-armhf
+    runs-on: ubuntu-24.04
+    # Building under emulation is several times slower than native.
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: Build
+        run: |
+          docker run --rm --platform linux/arm/v7 \
+            -v "$GITHUB_WORKSPACE:/src" -w /src \
+            debian:bookworm \
+            sh -c './.github/scripts/vowifi-build.sh asterisk-rpi-armhf; rc=$?; chown -R '"$(id -u):$(id -g)"' /src; exit $rc'
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: asterisk-rpi-armhf
+          path: out/asterisk-rpi-armhf.tar.gz
+          retention-days: 14
