@@ -41,6 +41,7 @@
 #include "res_pjsip/include/res_pjsip_private.h"
 #include "asterisk/vector.h"
 #include "asterisk/pbx.h"
+#include "asterisk/astdb.h"
 #include "res_pjsip_outbound_registration/volte.h"
 
 /*** DOCUMENTATION
@@ -1889,6 +1890,180 @@ out:
 }
 
 /*! \brief Callback function for handling a response to a registration attempt */
+
+/* PATCH_REG_EVENT_SUBSCRIBE */
+static void volte_reg_subscribe_cb(void *token, pjsip_event *e)
+{
+	if (e->type == PJSIP_EVENT_TSX_STATE && e->body.tsx_state.tsx) {
+		ast_log(LOG_NOTICE, "VoLTE: reg-event SUBSCRIBE answered %d\n",
+			e->body.tsx_state.tsx->status_code);
+	}
+}
+
+#define VOLTE_REGINFO_DB_FAMILY "volte"
+#define VOLTE_REGINFO_DB_KEY "reginfo"
+
+/* Copy the value of attribute name="..." found inside [start, end) into out. */
+static void volte_reginfo_attr(const char *start, const char *end, const char *name, char *out, size_t len)
+{
+	char needle[32];
+	const char *p, *q;
+
+	ast_copy_string(out, "none", len);
+	snprintf(needle, sizeof(needle), " %s=\"", name);
+	p = strstr(start, needle);
+	if (!p || p >= end) {
+		return;
+	}
+	p += strlen(needle);
+	q = strchr(p, '"');
+	if (!q || q > end || (size_t) (q - p) >= len) {
+		return;
+	}
+	memcpy(out, p, q - p);
+	out[q - p] = '\0';
+}
+
+/* Store "<state>;<event>" of the first <contact> of a reginfo NOTIFY body in astdb. */
+static void volte_store_reginfo(pjsip_rx_data *rdata)
+{
+	pjsip_msg_body *body = rdata->msg_info.msg->body;
+	char *xml, *contact, *tag_end;
+	char state[32], event[32], value[72];
+
+	if (!body || !body->len || !body->data) {
+		return;
+	}
+	xml = ast_strndup(body->data, body->len);
+	if (!xml) {
+		return;
+	}
+	contact = strstr(xml, "<contact ");
+	tag_end = contact ? strchr(contact, '>') : NULL;
+	if (contact && tag_end) {
+		volte_reginfo_attr(contact, tag_end, "state", state, sizeof(state));
+		volte_reginfo_attr(contact, tag_end, "event", event, sizeof(event));
+		snprintf(value, sizeof(value), "%s;%s", state, event);
+		ast_db_put(VOLTE_REGINFO_DB_FAMILY, VOLTE_REGINFO_DB_KEY, value);
+		if (!strcmp(state, "terminated")) {
+			ast_log(LOG_WARNING, "VoLTE: network terminated our IMS registration (contact event=%s)\n", event);
+		}
+	}
+	ast_free(xml);
+}
+
+static void volte_send_reg_subscribe(struct sip_outbound_registration_client_state *client_state,
+	pjsip_transport *tp)
+{
+	struct ast_sip_endpoint *endpoint = NULL;
+	struct ast_sip_transport_state *transport_state = NULL;
+	pjsip_tx_data *tdata;
+	char impu[sizeof(((struct ast_sip_transport_state *)0)->volte.p_associated_uri)];
+	char bracket_impu[sizeof(impu) + 2];
+
+	if (get_endpoint_transport_transport_state(client_state, &endpoint, NULL, &transport_state)) {
+		goto out;
+	}
+
+	ao2_lock(transport_state);
+	ast_copy_string(impu, transport_state->volte.p_associated_uri, sizeof(impu));
+	ao2_unlock(transport_state);
+	if (ast_strlen_zero(impu)) {
+		ast_log(LOG_WARNING, "VoLTE: no registered IMPU, not sending reg-event SUBSCRIBE\n");
+		goto out;
+	}
+
+	if (ast_sip_create_request("SUBSCRIBE", NULL, endpoint, impu, NULL, &tdata)) {
+		ast_log(LOG_WARNING, "VoLTE: could not create reg-event SUBSCRIBE\n");
+		goto out;
+	}
+
+	ao2_lock(transport_state);
+	if (transport_state->service_routes) {
+		int idx;
+
+		for (idx = 0; idx < AST_VECTOR_SIZE(transport_state->service_routes); ++idx) {
+			ast_sip_add_header(tdata, "Route", AST_VECTOR_GET(transport_state->service_routes, idx));
+		}
+	}
+	ast_sip_add_header(tdata, "Security-Verify", transport_state->volte.security_server);
+	if (transport_state->volte.p_access_network_info[0]) {
+		ast_sip_add_header(tdata, "P-Access-Network-Info", transport_state->volte.p_access_network_info);
+	}
+	ao2_unlock(transport_state);
+
+	ast_sip_add_header(tdata, "Require", "sec-agree");
+	ast_sip_add_header(tdata, "Proxy-Require", "sec-agree");
+	ast_sip_add_header(tdata, "Supported", "path, sec-agree");
+	snprintf(bracket_impu, sizeof(bracket_impu), "<%s>", impu);
+	ast_sip_add_header(tdata, "P-Preferred-Identity", bracket_impu);
+	ast_sip_update_from(tdata, impu);
+	ast_sip_add_header(tdata, "Event", "reg");
+	ast_sip_add_header(tdata, "Accept", "application/reginfo+xml");
+	/* TS 24.229 5.1.1.3: the UE sets Expires to 600000; the S-CSCF shortens it. */
+	ast_sip_add_header(tdata, "Expires", "600000");
+
+	/* Send on the protected link the REGISTER used; never resolve the IMPU domain. */
+	if (tp) {
+		pjsip_tpselector tp_sel;
+
+		memset(&tp_sel, 0, sizeof(tp_sel));
+		tp_sel.type = PJSIP_TPSELECTOR_TRANSPORT;
+		tp_sel.u.transport = tp;
+		pjsip_tx_data_set_transport(tdata, &tp_sel);
+		tdata->dest_info.name = tp->remote_name.host;
+		tdata->dest_info.cur_addr = 0;
+		tdata->dest_info.addr.count = 1;
+		tdata->dest_info.addr.entry[0].type = (pjsip_transport_type_e) tp->key.type;
+		tdata->dest_info.addr.entry[0].priority = 0;
+		tdata->dest_info.addr.entry[0].weight = 0;
+		pj_sockaddr_cp(&tdata->dest_info.addr.entry[0].addr, &tp->key.rem_addr);
+		tdata->dest_info.addr.entry[0].addr_len = tp->addr_len;
+	}
+
+	/* New registration: forget the previous one's reginfo state until the first NOTIFY. */
+	ast_db_put(VOLTE_REGINFO_DB_FAMILY, VOLTE_REGINFO_DB_KEY, "subscribed;none");
+	if (ast_sip_send_request(tdata, NULL, endpoint, NULL, volte_reg_subscribe_cb)) {
+		ast_log(LOG_WARNING, "VoLTE: could not send reg-event SUBSCRIBE\n");
+	} else {
+		ast_log(LOG_NOTICE, "VoLTE: sent reg-event SUBSCRIBE for %s\n", impu);
+	}
+
+out:
+	ao2_cleanup(endpoint);
+	ao2_cleanup(transport_state);
+}
+
+/* Answer NOTIFY (Event: reg) for our out-of-dialog reg-event subscription with 200 OK. */
+static pj_bool_t volte_reg_notify_on_rx_request(pjsip_rx_data *rdata)
+{
+	static const pj_str_t STR_EVENT = { "Event", 5 };
+	static const pj_str_t STR_EVENT_SHORT = { "o", 1 };
+	pjsip_generic_string_hdr *event;
+	pj_str_t *method = &rdata->msg_info.msg->line.req.method.name;
+
+	if (pj_stricmp2(method, "NOTIFY")) {
+		return PJ_FALSE;
+	}
+	event = (pjsip_generic_string_hdr *) pjsip_msg_find_hdr_by_names(rdata->msg_info.msg,
+		&STR_EVENT, &STR_EVENT_SHORT, NULL);
+	if (!event || event->hvalue.slen < 3 || pj_strnicmp2(&event->hvalue, "reg", 3)
+		|| (event->hvalue.slen > 3 && event->hvalue.ptr[3] != ';' && event->hvalue.ptr[3] != ' ')) {
+		return PJ_FALSE;
+	}
+	ast_log(LOG_NOTICE, "VoLTE: answering reg-event NOTIFY with 200 OK\n");
+	volte_store_reginfo(rdata);
+	pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 200, NULL, NULL, NULL);
+	return PJ_TRUE;
+}
+
+static pjsip_module volte_reg_notify_module = {
+	.name = { "VoLTE reg-event NOTIFY", 22 },
+	/* Ahead of Asterisk's distributor (PJSIP_MOD_PRIORITY_TSX_LAYER - 6). */
+	.priority = PJSIP_MOD_PRIORITY_TSX_LAYER - 7,
+	.on_rx_request = volte_reg_notify_on_rx_request,
+};
+
 static int handle_registration_response(void *data)
 {
 	struct registration_response *response = data;
@@ -2082,6 +2257,8 @@ volte_failed:
 		save_response_fields_to_transport(response);
 		if (response->client_state->volte)
 			store_volte_p_associated_uri(response);
+		if (response->client_state->volte && response->expiration)
+			volte_send_reg_subscribe(response->client_state, response->rdata->tp_info.transport);
 	} else if (response->client_state->destroy) {
 		/* We need to deal with the pending destruction instead. */
 	} else if (response->retry_after) {
@@ -3665,6 +3842,7 @@ static int unload_module(void)
 	int remaining;
 
 	network_change_sub = stasis_unsubscribe_and_join(network_change_sub);
+	ast_sip_unregister_service(&volte_reg_notify_module);
 
 	ast_manager_unregister("PJSIPShowRegistrationsOutbound");
 	ast_manager_unregister("PJSIPUnregister");
@@ -3784,6 +3962,7 @@ static int load_module(void)
 
 	/* Register how this module identifies endpoints. */
 	ast_sip_register_endpoint_identifier(&line_identifier);
+	ast_sip_register_service(&volte_reg_notify_module);
 
 	/* Register CLI commands. */
 	cli_formatter = ao2_alloc(sizeof(struct ast_sip_cli_formatter_entry), NULL);
