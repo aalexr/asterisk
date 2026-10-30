@@ -2,7 +2,7 @@
 #
 # Build Asterisk (vowifi branch) on a Debian based system and stage the
 # installed tree as a tarball.  Used by .github/workflows/VowifiBuild.yml
-# for the Linux x64 and Raspberry Pi (arm64/armhf) builds, but can be run
+# for the Linux x64 and Raspberry Pi (arm64) builds, but can be run
 # by hand inside a Debian/Raspberry Pi OS container as well.
 #
 # Usage: vowifi-build.sh <artifact-name>

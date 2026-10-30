@@ -7,8 +7,6 @@ name: VowifiBuild
 #   linux-x64    Debian bookworm amd64, native runner
 #   rpi-arm64    Debian bookworm arm64, native arm runner
 #                (Raspberry Pi OS 64-bit, Pi 3/4/5/Zero 2 W)
-#   rpi-armhf    Debian bookworm armhf (ARMv7), emulated with QEMU
-#                (Raspberry Pi OS 32-bit on Pi 2/3/4/Zero 2 W)
 
 on:
   push:
@@ -68,33 +66,3 @@ jobs:
           path: out/asterisk-${{ matrix.name }}.tar.gz
           retention-days: 14
 
-  rpi-armhf:
-    name: rpi-armhf
-    runs-on: ubuntu-24.04
-    # Building under emulation is several times slower than native.
-    timeout-minutes: 360
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: blob:none
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm
-
-      - name: Build
-        run: |
-          docker run --rm --platform linux/arm/v7 \
-            -v "$GITHUB_WORKSPACE:/src" -w /src \
-            debian:bookworm \
-            sh -c './.github/scripts/vowifi-build.sh asterisk-rpi-armhf; rc=$?; chown -R '"$(id -u):$(id -g)"' /src; exit $rc'
-
-      - name: Upload build
-        uses: actions/upload-artifact@v4
-        with:
-          name: asterisk-rpi-armhf
-          path: out/asterisk-rpi-armhf.tar.gz
-          retention-days: 14
