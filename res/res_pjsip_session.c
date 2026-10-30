@@ -3091,6 +3091,21 @@ static void session_precondition_send_update(struct ast_sip_session *session)
 	ast_sip_session_refresh(session, NULL, NULL, NULL, method, generate_new_sdp, NULL);
 }
 
+
+/* PATCH_UPDATE_AFTER_PRACK: runs on the session serializer once the PRACK is answered. */
+static int session_precondition_update_after_prack(void *data)
+{
+	struct ast_sip_session *session = data;
+
+	if (session->precondition_state == AST_SIP_SESSION_PRECONDITION_MO_WAIT_PRACK) {
+		ast_debug(1, "%s: PRACK answered, sending precondition UPDATE.\n",
+			  ast_sip_session_get_name(session));
+		session_precondition_send_update(session);
+	}
+	ao2_ref(session, -1);
+	return 0;
+}
+
 static int session_precondition_timeout(void *data)
 {
 	struct ast_sip_session *session = data;
@@ -4518,6 +4533,17 @@ static pj_bool_t session_on_rx_response(pjsip_rx_data *rdata)
 	SCOPE_ENTER(1, "%s Method: %.*s Status: %d\n", ast_sip_session_get_name(session),
 		(int)rdata->msg_info.cseq->method.name.slen, rdata->msg_info.cseq->method.name.ptr, status.code);
 
+	/* PATCH_UPDATE_AFTER_PRACK: final response to our PRACK -> now send the deferred UPDATE
+	 * (also on an error response, so the call can never hang in this state). */
+	if (session && status.code >= 200
+		&& session->precondition_state == AST_SIP_SESSION_PRECONDITION_MO_WAIT_PRACK
+		&& !pj_strcmp2(&rdata->msg_info.cseq->method.name, "PRACK")) {
+		ao2_ref(session, +1);
+		if (ast_sip_push_task(session->serializer, session_precondition_update_after_prack, session)) {
+			ao2_ref(session, -1);
+		}
+	}
+
 	SCOPE_EXIT_RTN_VALUE(PJ_FALSE);
 }
 
@@ -4975,10 +5001,22 @@ static void handle_incoming_response(struct ast_sip_session *session, pjsip_rx_d
 			session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_COMPLETE;
 		} else if (session->dedicated_bearer_up) {
 			/* AMI already reported that dedicated bearer is up */
-			/* Send UPDATE now and enter MO_UPDATE state. */
-			ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
-				  ast_sip_session_get_name(session));
-			session_precondition_send_update(session);
+			static const pj_str_t STR_RSEQ = { "RSeq", 4 };
+			const char *after_prack = getenv("VOWIFI_UPDATE_AFTER_PRACK");
+
+			if (!ast_strlen_zero(after_prack) && strcmp(after_prack, "0")
+				&& pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &STR_RSEQ, NULL)) {
+				/* PATCH_UPDATE_AFTER_PRACK: reliable 183 -> PJSIP is sending its PRACK now;
+				 * send the UPDATE once that PRACK is answered (session_on_rx_response). */
+				ast_debug(1, "%s: Precondition state is waiting for PRACK response before UPDATE.\n",
+					  ast_sip_session_get_name(session));
+				session->precondition_state = AST_SIP_SESSION_PRECONDITION_MO_WAIT_PRACK;
+			} else {
+				/* Send UPDATE now and enter MO_UPDATE state. */
+				ast_debug(1, "%s: Precondition state is waiting for UPDATE to complete.\n",
+					  ast_sip_session_get_name(session));
+				session_precondition_send_update(session);
+			}
 		} else if (session->endpoint->dedicated_bearer_up) {
 			int res;
 			/* Automatically set dedicated bearer to up after given time */

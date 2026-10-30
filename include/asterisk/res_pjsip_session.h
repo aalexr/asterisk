@@ -180,6 +180,8 @@ enum ast_sip_session_precondition {
 	AST_SIP_SESSION_PRECONDITION_MT_WAIT_BEARER,
 	AST_SIP_SESSION_PRECONDITION_MT_WAIT_UPDATE,
 	AST_SIP_SESSION_PRECONDITION_MT_COMPLETE,
+	/* PATCH_UPDATE_AFTER_PRACK: UPDATE deferred until the 183 PRACK is answered */
+	AST_SIP_SESSION_PRECONDITION_MO_WAIT_PRACK,
 };
 
 /*! \brief Indicates the precondition state in case of VoLTE calls */
