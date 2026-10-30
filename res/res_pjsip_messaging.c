@@ -507,9 +507,11 @@ static void set_preferred_identity(pjsip_tx_data *tdata, const char *uri)
 
 static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 {
+	/* PATCH_RPACK_ROUTING3 */
 	pj_status_t status;
 	char buf[7];
-	char addr_buf[512];
+	char pai_buf[512];
+	char reqm_buf[600];
 	buf[0] = 2; /* RPACK mobile-to-network.  */
 	buf[1] = ack_ref;
 	buf[2] = 0x41;
@@ -518,7 +520,6 @@ static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 	buf[5] = 0x00;
 
 	struct ast_sip_endpoint *endpoint = ast_pjsip_rdata_get_endpoint(rdata);
-
 	ast_assert(endpoint != NULL);
 	pjsip_tx_data *tdata;
 
@@ -528,36 +529,84 @@ static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 		return PJ_ENOMEM;
 	}
 
-	ssize_t size = pjsip_uri_print(PJSIP_URI_IN_FROMTO_HDR, (pjsip_name_addr *)rdata->msg_info.from->uri, addr_buf, sizeof(addr_buf) - 1);
-	if (size <= 0 || size >= sizeof(addr_buf)) {
-		return PJ_ENOMEM;
+	/* Target = P-Asserted-Identity of the incoming MESSAGE (the SMSC signalling address),
+	 * routed via the Service-Route. Fall back to the From URI. Used verbatim, like a native UE:
+	 * a ;transport= param here is routed on by the IMS core (see fix 4), and local delivery is
+	 * pinned below via the arrival transport + dest_info instead. */
+	static const pj_str_t PAI = { "P-Asserted-Identity", 19 };
+	pjsip_generic_string_hdr *pai_hdr = (pjsip_generic_string_hdr *)
+		pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &PAI, NULL);
+	const char *base_uri = NULL;
+	if (pai_hdr) {
+		int n = (int)pai_hdr->hvalue.slen;
+		const char *s = pai_hdr->hvalue.ptr;
+		while (n > 0 && (*s == ' ' || *s == '<')) { s++; n--; }
+		while (n > 0 && (s[n-1] == ' ' || s[n-1] == '>')) { n--; }
+		if (n > 0 && n < (int)sizeof(pai_buf)) {
+			memcpy(pai_buf, s, n);
+			pai_buf[n] = '\0';
+			base_uri = pai_buf;
+		}
 	}
-	addr_buf[size] = '\0';
+	if (!base_uri) {
+		ssize_t size = pjsip_uri_print(PJSIP_URI_IN_REQ_URI,
+			pjsip_uri_get_uri(rdata->msg_info.from->uri), pai_buf, sizeof(pai_buf) - 1);
+		if (size <= 0 || size >= (ssize_t)sizeof(pai_buf)) {
+			return PJ_ENOMEM;
+		}
+		pai_buf[size] = '\0';
+		base_uri = pai_buf;
+	}
+	snprintf(reqm_buf, sizeof(reqm_buf), "%s", base_uri);
 
-	status = ast_sip_create_request("MESSAGE", NULL, endpoint, addr_buf, NULL, &tdata);
+	status = ast_sip_create_request("MESSAGE", NULL, endpoint, reqm_buf, NULL, &tdata);
 	if (status) {
-		ast_log(LOG_WARNING, "PJSIP MESSAGE - Could not create request\n");
+		ast_log(LOG_WARNING, "PJSIP MESSAGE - Could not create RP-ACK request\n");
 		return status;
 	}
 
-	ao2_lock(transport_state);
+	/* Pin to the transport the SMS arrived on -> reuse the open IMS socket (no EADDRINUSE). */
+	{
+		pjsip_tpselector tp_sel;
+		memset(&tp_sel, 0, sizeof(tp_sel));
+		tp_sel.type = PJSIP_TPSELECTOR_TRANSPORT;
+		tp_sel.u.transport = rdata->tp_info.transport;
+		pjsip_tx_data_set_transport(tdata, &tp_sel);
+	}
 
-	if (transport_state->service_routes) {
-		int idx;
-
-		for (idx = 0; idx < AST_VECTOR_SIZE(transport_state->service_routes); ++idx) {
-			char *service_route = AST_VECTOR_GET(transport_state->service_routes, idx);
-
-			ast_sip_add_header(tdata, "Route", service_route);
+	/* Never let PJSIP resolve the request-URI (the SMSC identity) for local delivery: an FQDN
+	 * PAI is IMS-internal (NXDOMAIN on our resolver -> the RP-ACK never leaves, fix 3), and a
+	 * raw-IP PAI without ;transport would resolve to UDP and not match the pinned TCP transport
+	 * (fix 4). Pre-seed tdata->dest_info with the arrival transport's connected peer (the
+	 * P-CSCF) so pjsip_endpt_send_request skips resolution and sends the RP-ACK back on the
+	 * incoming IMS link to the P-CSCF, which loose-routes it onward to the SMSC -- exactly how a
+	 * native UE writes the RP-ACK back. */
+	{
+		if (rdata->tp_info.transport) {
+			pjsip_transport *itp = rdata->tp_info.transport;
+			tdata->dest_info.name = itp->remote_name.host;
+			tdata->dest_info.cur_addr = 0;
+			tdata->dest_info.addr.count = 1;
+			tdata->dest_info.addr.entry[0].type = (pjsip_transport_type_e) itp->key.type;
+			tdata->dest_info.addr.entry[0].priority = 0;
+			tdata->dest_info.addr.entry[0].weight = 0;
+			pj_sockaddr_cp(&tdata->dest_info.addr.entry[0].addr, &itp->key.rem_addr);
+			tdata->dest_info.addr.entry[0].addr_len = itp->addr_len;
 		}
 	}
 
+	ao2_lock(transport_state);
+	if (transport_state->service_routes) {
+		int idx;
+		for (idx = 0; idx < AST_VECTOR_SIZE(transport_state->service_routes); ++idx) {
+			char *service_route = AST_VECTOR_GET(transport_state->service_routes, idx);
+			ast_sip_add_header(tdata, "Route", service_route);
+		}
+	}
 	ast_sip_add_header(tdata, "Security-Verify", transport_state->volte.security_server);
-
 	if (transport_state->volte.p_access_network_info[0]) {
 		ast_sip_add_header(tdata, "P-Access-Network-Info", transport_state->volte.p_access_network_info);
 	}
-
 	ao2_unlock(transport_state);
 
 	ast_sip_add_header(tdata, "Require", "sec-agree");
@@ -589,13 +638,13 @@ static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 	status = ast_sip_add_binary_body(tdata, &body, 6);
 	if (status) {
 		pjsip_tx_data_dec_ref(tdata);
-		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not add body to request\n");
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not add body to RP-ACK\n");
 		return status;
 	}
 
 	status = ast_sip_send_request(tdata, NULL, endpoint, NULL, NULL);
 	if (status) {
-		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not send request\n");
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not send RP-ACK\n");
 		return status;
 	}
 
