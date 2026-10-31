@@ -1,0 +1,97 @@
+# Build the vowifi branch for the vowifi_gateway engine image (Fedora 40,
+# x86_64 + aarch64) and publish the installed tree so the engine build can
+# download it instead of compiling Asterisk (slow on a Raspberry Pi).
+#
+# Every build uploads a workflow artifact.  Pushes (not PRs) also publish the
+# tarballs to a release tagged build-<commit sha>; that URL is what
+# vowifi_gateway/engine/Containerfile fetches for its ASTERISK_REF, so it
+# needs no GitHub auth.
+#
+# The upstream Asterisk CI workflows (PRSubmitTests, NightlyTests, ...) were
+# removed: they depend on asterisk/asterisk-ci-actions and the upstream
+# testsuite and always fail in this fork.
+name: VowifiBuild
+run-name: "VowifiBuild ${{ github.ref_name }} ${{ github.sha }}"
+
+on:
+  push:
+    branches: ['vowifi/**']
+  pull_request:
+    branches: ['vowifi/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Keep in sync with FROM / PJPROJECT_REPO / PJPROJECT_REF in
+  # vowifi_gateway/engine/Containerfile.  The pjproject SHA is part of the
+  # asset name, so a mismatch makes the engine fall back to a source build.
+  FEDORA_RELEASE: '40'
+  PJPROJECT_REPO: https://gitea.sysmocom.de/sysmocom/pjproject.git
+  PJPROJECT_REF: 20537ab1e6beb2baf9ec15599e0217a601cf7ce5
+
+jobs:
+  build:
+    name: fedora40-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: registry.fedoraproject.org/fedora:40
+    steps:
+      # git first, so actions/checkout makes a real repo (make_version uses it).
+      - name: Install git
+        run: dnf -y install git tar gzip
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: .github/scripts/vowifi-build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asterisk-fedora${{ env.FEDORA_RELEASE }}-${{ matrix.arch }}
+          path: out/asterisk-*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: build-${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release build-${{ github.sha }}
+        working-directory: dist
+        run: |
+          sha256sum asterisk-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber asterisk-*.tar.gz SHA256SUMS
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "vowifi build ${GITHUB_SHA::12} (${GITHUB_REF_NAME})" \
+              --notes "Prebuilt Asterisk for vowifi_gateway engine/Containerfile (Fedora ${FEDORA_RELEASE}, pjproject ${PJPROJECT_REF::12}). Set ASTERISK_REF=${GITHUB_SHA}." \
+              asterisk-*.tar.gz SHA256SUMS
+          fi
