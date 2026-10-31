@@ -452,8 +452,11 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 	int p = 1;
 	char oa[300];
 	p += unpackaddress(oa, tpdu + p, sizeof(oa));
-	if (p + 9 > tpdu_len)
+	if (p + 9 > tpdu_len) {
+		ast_log(LOG_WARNING, "SMS TPDU truncated before TP-PID/DCS/SCTS (%d octets). Dropping text\n",
+			tpdu_len);
 		return;
+	}
 	/*int pid = tpdu[p++] */p++;
 	int dcs = tpdu[p++];
 	struct timeval scts = unpackdate(tpdu + p);
@@ -462,31 +465,48 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 	unsigned char udh[300];
 	int udhl, udl;
 	unsigned int validated_udhl = 0;
-	if (p >= tpdu_len)
+	/* Validate TP-UDL and the UDH length (TS 23.040 9.2.3.16, 9.2.3.24) against the octets
+	 * actually present before decoding, so a malformed PDU can't make the decoder read past the
+	 * TPDU or leave UDH bytes uninitialised. The RP-ACK is sent regardless of what happens here,
+	 * so every rejection is logged: otherwise the SMS is confirmed to the SMSC and then reaches
+	 * the dialplan with an empty body, which looks like a deliberate empty message. */
+	if (p >= tpdu_len) {
+		ast_log(LOG_WARNING, "SMS TPDU has no TP-UDL. Dropping text\n");
 		return;
-	unsigned int tp_udl = tpdu[p];
-	unsigned int tp_ud_bytes;
-	if (is7bit(dcs)) {
-		tp_ud_bytes = (tp_udl * 7 + 7) / 8;
-	} else if (is8bit(dcs)) {
-		tp_ud_bytes = tp_udl;
-	} else {
-		tp_ud_bytes = tp_udl + (tp_udl % 2);
 	}
-	if (tp_ud_bytes > (unsigned int)(tpdu_len - p - 1))
+	unsigned int tp_udl = tpdu[p];
+	/* Octets the declared TP-UD occupies: 7-bit TP-UDL counts septets, 8-bit and UCS-2 count
+	 * octets. A UCS-2 TP-UDL may be odd: with an odd-length UDH (e.g. the 7-octet UDH of a
+	 * 16-bit concat reference) the text follows without fill. */
+	unsigned int tp_ud_bytes = is7bit(dcs) ? (tp_udl * 7 + 7) / 8 : tp_udl;
+	if (tp_ud_bytes > (unsigned int)(tpdu_len - p - 1)) {
+		ast_log(LOG_WARNING, "SMS TP-UDL %u (DCS 0x%02x) needs %u octets, only %d present. "
+			"Dropping text\n", tp_udl, dcs, tp_ud_bytes, tpdu_len - p - 1);
 		return;
+	}
 	if (udhi) {
-		if (!tp_ud_bytes)
+		if (!tp_ud_bytes) {
+			ast_log(LOG_WARNING, "SMS has UDHI set but no TP-UD. Dropping text\n");
 			return;
+		}
 		validated_udhl = tpdu[p + 1];
-		if (is7bit(dcs)) {
-			if ((validated_udhl + 1) * 8 > tp_udl * 7)
-				return;
-		} else if (validated_udhl + 1 > tp_udl) {
+		if (is7bit(dcs) ? (validated_udhl + 1) * 8 > tp_udl * 7 : validated_udhl + 1 > tp_udl) {
+			ast_log(LOG_WARNING, "SMS UDH length %u does not fit TP-UDL %u (DCS 0x%02x). "
+				"Dropping text\n", validated_udhl, tp_udl, dcs);
 			return;
 		}
 	}
-	p += unpacksms(dcs, tpdu + p, udh, &udhl, ud, &udl, udhi);
+	/* unpacksms() rounds a UCS-2 TP-UDL up to even, so for an odd one it reads one octet past
+	 * the TP-UD. Decode from a zero-padded copy so that read stays in bounds, then drop the half
+	 * character it produces. */
+	unsigned char udbuf[1 + 255 + 1];
+	memset(udbuf, 0, sizeof(udbuf));
+	udbuf[0] = tp_udl;
+	memcpy(udbuf + 1, tpdu + p + 1, tp_ud_bytes);
+	unpacksms(dcs, udbuf, udh, &udhl, ud, &udl, udhi);
+	p += 1 + tp_ud_bytes;
+	if (!is7bit(dcs) && !is8bit(dcs) && (tp_udl % 2) && udl > 0)
+		udl--;
 	ud[udl] = 0;
 
 	char buf2[300 * 4 + 5];
@@ -516,7 +536,7 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 			i += 2 + iel;
 		}
 		if (ref >= 0 && total > 1 && seq >= 1 && seq <= total) {
-			char buf_concat[24];
+			char buf_concat[40];
 			snprintf(buf_concat, sizeof(buf_concat), "%d:%d:%d", ref, total, seq);
 			ast_msg_set_var(msg, "SMS_CONCAT", buf_concat);
 			ast_log(LOG_DEBUG, "SMS concat ref=%d part %d/%d.\n", ref, seq, total);
