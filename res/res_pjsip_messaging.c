@@ -461,6 +461,31 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 	unsigned short ud[300];
 	unsigned char udh[300];
 	int udhl, udl;
+	unsigned int validated_udhl = 0;
+	if (p >= tpdu_len)
+		return;
+	unsigned int tp_udl = tpdu[p];
+	unsigned int tp_ud_bytes;
+	if (is7bit(dcs)) {
+		tp_ud_bytes = (tp_udl * 7 + 7) / 8;
+	} else if (is8bit(dcs)) {
+		tp_ud_bytes = tp_udl;
+	} else {
+		tp_ud_bytes = tp_udl + (tp_udl % 2);
+	}
+	if (tp_ud_bytes > (unsigned int)(tpdu_len - p - 1))
+		return;
+	if (udhi) {
+		if (!tp_ud_bytes)
+			return;
+		validated_udhl = tpdu[p + 1];
+		if (is7bit(dcs)) {
+			if ((validated_udhl + 1) * 8 > tp_udl * 7)
+				return;
+		} else if (validated_udhl + 1 > tp_udl) {
+			return;
+		}
+	}
 	p += unpacksms(dcs, tpdu + p, udh, &udhl, ud, &udl, udhi);
 	ud[udl] = 0;
 
@@ -473,10 +498,11 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 	 * "ref:total:seq" as SMS_CONCAT so the dialplan can hand it on and the parts can be joined;
 	 * a single-part SMS leaves it unset. */
 	if (udhi) {
-		int i = 0, ref = -1, total = 0, seq = 0;
-		while (i + 2 <= udhl) {
-			int iei = udh[i], iel = udh[i + 1];
-			if (i + 2 + iel > udhl)
+		unsigned int i = 0;
+		int ref = -1, total = 0, seq = 0;
+		while (i + 2 <= validated_udhl) {
+			unsigned int iei = udh[i], iel = udh[i + 1];
+			if (i + 2 + iel > validated_udhl)
 				break;
 			if (iei == 0x00 && iel == 3) {
 				ref = udh[i + 2];
