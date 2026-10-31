@@ -468,7 +468,36 @@ static void parse_tpdu(struct ast_msg *msg, unsigned char *tpdu, int tpdu_len)
 	utf16_to_utf8(ud, udl, buf2, sizeof(buf2));
 	ast_log(LOG_DEBUG, "SMS UD='%s' OA='%s'.\n", buf2, oa);
 
-	/* TODO: udh, scts */
+	/* Concatenated SMS: each part arrives as its own RP-DATA with a UDH concat IE (TS 23.040
+	 * 9.2.3.24.1 IEI 0x00 = 8-bit reference, 9.2.3.24.8 IEI 0x08 = 16-bit reference). Expose
+	 * "ref:total:seq" as SMS_CONCAT so the dialplan can hand it on and the parts can be joined;
+	 * a single-part SMS leaves it unset. */
+	if (udhi) {
+		int i = 0, ref = -1, total = 0, seq = 0;
+		while (i + 2 <= udhl) {
+			int iei = udh[i], iel = udh[i + 1];
+			if (i + 2 + iel > udhl)
+				break;
+			if (iei == 0x00 && iel == 3) {
+				ref = udh[i + 2];
+				total = udh[i + 3];
+				seq = udh[i + 4];
+			} else if (iei == 0x08 && iel == 4) {
+				ref = (udh[i + 2] << 8) | udh[i + 3];
+				total = udh[i + 4];
+				seq = udh[i + 5];
+			}
+			i += 2 + iel;
+		}
+		if (ref >= 0 && total > 1 && seq >= 1 && seq <= total) {
+			char buf_concat[24];
+			snprintf(buf_concat, sizeof(buf_concat), "%d:%d:%d", ref, total, seq);
+			ast_msg_set_var(msg, "SMS_CONCAT", buf_concat);
+			ast_log(LOG_DEBUG, "SMS concat ref=%d part %d/%d.\n", ref, seq, total);
+		}
+	}
+
+	/* TODO: scts */
 	char buf_scts[30];
 	snprintf(buf_scts, sizeof(buf_scts), "%lld", (long long) scts.tv_sec);
 	ast_msg_set_var(msg, "SMS_SMSC_TIMESTAMP", buf_scts);
@@ -565,25 +594,55 @@ static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 		return status;
 	}
 
-	/* Pin to the transport the SMS arrived on -> reuse the open IMS socket (no EADDRINUSE). */
-	{
-		pjsip_tpselector tp_sel;
-		memset(&tp_sel, 0, sizeof(tp_sel));
-		tp_sel.type = PJSIP_TPSELECTOR_TRANSPORT;
-		tp_sel.u.transport = rdata->tp_info.transport;
-		pjsip_tx_data_set_transport(tdata, &tp_sel);
-	}
-
 	/* Never let PJSIP resolve the request-URI (the SMSC identity) for local delivery: an FQDN
 	 * PAI is IMS-internal (NXDOMAIN on our resolver -> the RP-ACK never leaves, fix 3), and a
-	 * raw-IP PAI without ;transport would resolve to UDP and not match the pinned TCP transport
-	 * (fix 4). Pre-seed tdata->dest_info with the arrival transport's connected peer (the
-	 * P-CSCF) so pjsip_endpt_send_request skips resolution and sends the RP-ACK back on the
-	 * incoming IMS link to the P-CSCF, which loose-routes it onward to the SMSC -- exactly how a
-	 * native UE writes the RP-ACK back. */
+	 * raw-IP PAI without ;transport would resolve to UDP and not match the TCP IMS link
+	 * (fix 4). Pre-seed tdata->dest_info with the P-CSCF so pjsip_endpt_send_request skips
+	 * resolution; the P-CSCF loose-routes the RP-ACK onward to the SMSC.
+	 *
+	 * Which P-CSCF port (fix 5): the RP-ACK is a NEW request from the UE, and TS 33.203 sec-agree
+	 * says UE-originated requests go from the UE's protected client port to the P-CSCF's
+	 * protected SERVER port (port-s, volte.remote_addr_s) -- the same path MO SMS and REGISTER
+	 * take. The MT SMS arrived on the connection the P-CSCF opened from ITS client port (port-c),
+	 * and sending the RP-ACK back on that link targets port-c. Telus/EE/Telefonica DE accept that,
+	 * but MTS RU (Nokia/ALU P-CSCF) silently drops it: no response at all, so the SMSC never sees
+	 * the RP-ACK and holds back the remaining parts of a concatenated SMS. So target port-s and
+	 * don't pin the transport; PJSIP then reuses the registered UE port-c -> P-CSCF port-s
+	 * connection by its remote address (no new connection, so no EADDRINUSE, fix 2). Only when
+	 * the protected server address is unknown fall back to the arrival link. */
 	{
-		if (rdata->tp_info.transport) {
-			pjsip_transport *itp = rdata->tp_info.transport;
+		pjsip_transport *itp = rdata->tp_info.transport;
+		pj_sockaddr remote_s;
+		int have_port_s = 0;
+
+		ao2_lock(transport_state);
+		if (transport_state->volte.registered &&
+		    pj_sockaddr_has_addr(&transport_state->volte.remote_addr_s) &&
+		    pj_sockaddr_get_port(&transport_state->volte.remote_addr_s)) {
+			pj_sockaddr_cp(&remote_s, &transport_state->volte.remote_addr_s);
+			have_port_s = 1;
+		}
+		ao2_unlock(transport_state);
+
+		if (itp && have_port_s) {
+			tdata->dest_info.name = itp->remote_name.host;
+			tdata->dest_info.cur_addr = 0;
+			tdata->dest_info.addr.count = 1;
+			tdata->dest_info.addr.entry[0].type = (pjsip_transport_type_e) itp->key.type;
+			tdata->dest_info.addr.entry[0].priority = 0;
+			tdata->dest_info.addr.entry[0].weight = 0;
+			pj_sockaddr_cp(&tdata->dest_info.addr.entry[0].addr, &remote_s);
+			tdata->dest_info.addr.entry[0].addr_len = pj_sockaddr_get_len(&remote_s);
+			ast_debug(1, "RP-ACK to P-CSCF protected server port %d\n",
+				pj_sockaddr_get_port(&remote_s));
+		} else if (itp) {
+			/* Pin to the transport the SMS arrived on -> reuse the open IMS socket. */
+			pjsip_tpselector tp_sel;
+			memset(&tp_sel, 0, sizeof(tp_sel));
+			tp_sel.type = PJSIP_TPSELECTOR_TRANSPORT;
+			tp_sel.u.transport = itp;
+			pjsip_tx_data_set_transport(tdata, &tp_sel);
+
 			tdata->dest_info.name = itp->remote_name.host;
 			tdata->dest_info.cur_addr = 0;
 			tdata->dest_info.addr.count = 1;
@@ -592,6 +651,7 @@ static pj_status_t send_rpack(pjsip_rx_data *rdata, unsigned char ack_ref)
 			tdata->dest_info.addr.entry[0].weight = 0;
 			pj_sockaddr_cp(&tdata->dest_info.addr.entry[0].addr, &itp->key.rem_addr);
 			tdata->dest_info.addr.entry[0].addr_len = itp->addr_len;
+			ast_debug(1, "RP-ACK on the arrival transport (no protected server port known)\n");
 		}
 	}
 
