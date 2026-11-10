@@ -4318,8 +4318,31 @@ static int new_invite(struct new_invite *invite)
 
 	/* Regarding TS 24.299 Clause B.3.1.4, preconditon is to be performed, if supported or required. */
 	invite->session->precondition_required = volte_is_require_precondition(invite->rdata);
-	if (!invite->session->precondition_required)
-		invite->session->precondition_required = volte_is_supported_precondition(invite->rdata);
+	if (!invite->session->precondition_required) {
+		/* PATCH_MT_PRECONDITION_REQUIRE_ONLY: with VOWIFI_MT_PRECONDITION_REQUIRE_ONLY=1 an
+		 * incoming call uses preconditions only when the INVITE carries "Require: precondition",
+		 * the same rule the MO side applies to the 183. A merely "Supported: precondition" INVITE
+		 * is answered without QoS attributes (RFC 3312 section 5: the answerer may decline the
+		 * extension), which proceeds like a carrier that offers no preconditions at all.
+		 *
+		 * Why: on an MT call this code answers 183 with "curr:qos local none" and then waits
+		 * (MT_WAIT_UPDATE) for the network's UPDATE. Vodafone DE's INVITE only *supports*
+		 * preconditions and already reports its own side met; it waits for the UE to report
+		 * local QoS met instead, which we never send. Neither side sends the UPDATE, the call is
+		 * answered anyway, and the network never opens the media gate: no RTP reaches us at all.
+		 * Over VoWiFi there is no dedicated bearer to reserve, so skipping preconditions is safe.
+		 * Opt-in per line (like VOWIFI_UPDATE_AFTER_PRACK); without it the stock rule applies. */
+		const char *require_only = getenv("VOWIFI_MT_PRECONDITION_REQUIRE_ONLY");
+
+		if (!ast_strlen_zero(require_only) && strcmp(require_only, "0")) {
+			if (volte_is_supported_precondition(invite->rdata)) {
+				ast_debug(1, "%s: INVITE only supports precondition; not using it (require-only mode).\n",
+					  ast_sip_session_get_name(invite->session));
+			}
+		} else {
+			invite->session->precondition_required = volte_is_supported_precondition(invite->rdata);
+		}
+	}
 
 	sdp_info = pjsip_rdata_get_sdp_info(invite->rdata);
 	if (sdp_info && (sdp_info->sdp_err == PJ_SUCCESS) && sdp_info->sdp) {
