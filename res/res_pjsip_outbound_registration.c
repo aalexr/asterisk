@@ -1891,10 +1891,38 @@ out:
 	return ret;
 }
 
+/*!
+ * \internal
+ * \brief VOWIFI_PAU_DB: publish every P-Associated-URI of the REGISTER 200 OK (all header
+ * instances, comma-joined, as received) in astdb volte/pau, so applications learn the
+ * registered public identities (e.g. the MSISDN) without parsing the SIP trace.
+ */
+static void volte_store_pau_db(pjsip_rx_data *rdata)
+{
+	static const pj_str_t pau_name = { "P-Associated-URI", 16 };
+	pjsip_generic_string_hdr *hdr = NULL;
+	struct ast_str *all;
+
+	if (!rdata || !(all = ast_str_create(256))) {
+		return;
+	}
+	while ((hdr = pjsip_msg_find_hdr_by_name(rdata->msg_info.msg, &pau_name,
+			hdr ? hdr->next : NULL))) {
+		ast_str_append(&all, 0, "%s%.*s", ast_str_strlen(all) ? ", " : "",
+			(int) hdr->hvalue.slen, hdr->hvalue.ptr);
+	}
+	if (ast_str_strlen(all)) {
+		ast_db_put("volte", "pau", ast_str_buffer(all));
+	}
+	ast_free(all);
+}
+
 static int store_volte_p_associated_uri(struct registration_response *response)
 {
 	struct ast_sip_transport_state *transport_state = NULL;
 	int ret = -1;
+
+	volte_store_pau_db(response->rdata);
 
 	if (get_endpoint_transport_transport_state(response->client_state, NULL, NULL, &transport_state))
 		goto out;
