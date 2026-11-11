@@ -767,11 +767,12 @@ static void parse_rpdata(pjsip_rx_data *rdata, struct ast_msg *msg, int *ack_ref
 	int len = rdata->msg_info.msg->body->print_body(
 		rdata->msg_info.msg->body, (char *)buf, sizeof(buf));
 
-	if (len < 3) {
+	/* An RP-ACK may be just MTI + message reference (TS 24.011 7.3.3, RP-User-Data optional). */
+	if (len < 2 || (buf[0] == 0x01 && len < 3)) {
 		ast_log(LOG_DEBUG, "MESSAGE RP-DATA is too short or error: %d.\n", len);
 		return;
 	}
-			
+
 	char buf2[MAX_BODY_SIZE * 2 + 1];
 	hex_body(buf2, buf, len);
 	ast_log(LOG_DEBUG, "SMS RP-DATA '%s'.\n", buf2);
@@ -799,8 +800,31 @@ static void parse_rpdata(pjsip_rx_data *rdata, struct ast_msg *msg, int *ack_ref
 		parse_tpdu(msg, p + 2, tpdu_len);
 		return;
 	}
-	case 0x03: /* RP-ACK */
-	case 0x05: /* RP-ERROR */
+	case 0x03: /* RP-ACK, network to MS */
+	case 0x05: { /* RP-ERROR, network to MS */
+		/* VOWIFI_SMS_REPORT: the SMSC's submit report for one of our MO RP-DATA messages
+		 * (the SIP 2xx only means the IMS took it). Hand the verdict to the dialplan as message
+		 * variables, so applications act on it without parsing the log:
+		 *   SMS_REPORT        "ack" | "error"
+		 *   SMS_REPORT_REF    RP-Message Reference of the MO RP-DATA it answers (decimal)
+		 *   SMS_REPORT_CAUSE  RP-Cause value (TS 24.011 8.2.5.4; RP-ERROR only, decimal)
+		 * The message carries no body; volte_queue_sms_report sends SIP failures the same way. */
+		char num[8];
+		int cause = -1;
+
+		ast_msg_set_var(msg, "SMS_REPORT", buf[0] == 0x03 ? "ack" : "error");
+		snprintf(num, sizeof(num), "%d", buf[1] & 0xff);
+		ast_msg_set_var(msg, "SMS_REPORT_REF", num);
+		/* RP-ERROR: octet 2 = RP-Cause length, octet 3 = cause value (bit 8 = extension). */
+		if (buf[0] == 0x05 && len >= 4 && buf[2] >= 1) {
+			cause = buf[3] & 0x7f;
+			snprintf(num, sizeof(num), "%d", cause);
+			ast_msg_set_var(msg, "SMS_REPORT_CAUSE", num);
+		}
+		ast_verb(3, "SMS submit report: RP-%s ref=%d cause=%d\n",
+			buf[0] == 0x03 ? "ACK" : "ERROR", buf[1] & 0xff, cause);
+		return;
+	}
 	default:
 		ast_log(LOG_WARNING, "Unknown RP-DATA 0x%02x. Dropping message\n", buf[0]);
 		return;
@@ -1088,6 +1112,64 @@ static pj_bool_t is_uri_phone(const char *uri)
 	return PJ_TRUE;
 }
 
+/*! VOWIFI_SMS_REPORT: what the final SIP response to one MO RP-DATA MESSAGE is reported with. */
+struct volte_mo_report {
+	int ref;			/*!< RP-Message Reference of the RP-DATA */
+	char context[80];		/*!< the endpoint's message context */
+	char endpoint[128];
+};
+
+/*!
+ * \internal
+ * \brief Queue a body-less message carrying an SMS submit report into the endpoint's message
+ * context, with the same SMS_REPORT* variables an RP-ACK/RP-ERROR gets in parse_rpdata:
+ *   SMS_REPORT "sip", SMS_REPORT_REF, SMS_REPORT_SIP_STATUS (0 = no response), SMS_REPORT_REASON
+ */
+static void volte_queue_sms_report(const struct volte_mo_report *rep, int sip_status, const char *reason)
+{
+	struct ast_msg *msg = ast_msg_alloc();
+	char num[16];
+
+	if (!msg) {
+		return;
+	}
+	ast_msg_set_context(msg, "%s", rep->context);
+	ast_msg_set_exten(msg, "%s", "sms_report");
+	ast_msg_set_tech(msg, "%s", "PJSIP");
+	ast_msg_set_endpoint(msg, "%s", rep->endpoint);
+	ast_msg_set_body(msg, "%s", "");
+	ast_msg_set_var(msg, "SMS_REPORT", "sip");
+	snprintf(num, sizeof(num), "%d", rep->ref);
+	ast_msg_set_var(msg, "SMS_REPORT_REF", num);
+	snprintf(num, sizeof(num), "%d", sip_status);
+	ast_msg_set_var(msg, "SMS_REPORT_SIP_STATUS", num);
+	ast_msg_set_var(msg, "SMS_REPORT_REASON", reason);
+	ast_msg_queue(msg);	/* takes the reference, also on failure */
+}
+
+/*!
+ * \internal
+ * \brief Final response (or timeout / transport error) to an MO RP-DATA MESSAGE. A 2xx only
+ * means the IMS accepted it, so nothing is reported; the SMSC's RP-ACK/RP-ERROR follows as its
+ * own MESSAGE. Anything else means the SMS never reached the SMSC: report it.
+ */
+static void volte_mo_response_cb(void *token, pjsip_event *e)
+{
+	struct volte_mo_report *rep = token;
+	int code = 0;
+	char reason[128] = "";
+
+	if (e->type == PJSIP_EVENT_TSX_STATE && e->body.tsx_state.tsx) {
+		code = e->body.tsx_state.tsx->status_code;
+		ast_copy_pj_str(reason, &e->body.tsx_state.tsx->status_text, sizeof(reason));
+	}
+	if (code < 200 || code >= 300) {
+		ast_verb(3, "SMS RP-DATA ref=%d: MESSAGE failed with SIP %d %s\n", rep->ref, code, reason);
+		volte_queue_sms_report(rep, code, reason);
+	}
+	ast_free(rep);
+}
+
 static int volte_send_rp_data(struct msg_data *mdata, const char *orig_uri, struct ast_sip_endpoint *endpoint, const unsigned char *buf, size_t buflen)
 {
 	pjsip_tx_data *tdata;
@@ -1109,7 +1191,13 @@ static int volte_send_rp_data(struct msg_data *mdata, const char *orig_uri, stru
 	ao2_cleanup(transport);
 
 	if (!registered) {
+		struct volte_mo_report rep = { .ref = buflen > 1 ? buf[1] : -1 };
+
 		ast_log(LOG_NOTICE, "No VoLTE transport or no registered endpoint '%s'\n", ast_sorcery_object_get_id(endpoint));
+		/* MessageSend has long returned; this is the only way the sender learns of it. */
+		ast_copy_string(rep.context, S_OR(endpoint->message_context, endpoint->context), sizeof(rep.context));
+		ast_copy_string(rep.endpoint, ast_sorcery_object_get_id(endpoint), sizeof(rep.endpoint));
+		volte_queue_sms_report(&rep, 0, "not registered");
 		return -1;
 	}
 
@@ -1170,13 +1258,23 @@ static int volte_send_rp_data(struct msg_data *mdata, const char *orig_uri, stru
 		return -1;
 	}
 
-	status = ast_sip_send_request(tdata, NULL, endpoint, NULL, NULL);
+	struct volte_mo_report *rep = ast_calloc(1, sizeof(*rep));
+
+	if (rep) {
+		rep->ref = buflen > 1 ? buf[1] : -1;
+		ast_copy_string(rep->context, S_OR(endpoint->message_context, endpoint->context),
+			sizeof(rep->context));
+		ast_copy_string(rep->endpoint, ast_sorcery_object_get_id(endpoint), sizeof(rep->endpoint));
+	}
+	status = ast_sip_send_request(tdata, NULL, endpoint, rep, rep ? volte_mo_response_cb : NULL);
 	if (status) {
+		/* On failure the callback is never called. */
+		ast_free(rep);
 		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not send request\n");
 		return -1;
 	}
 
-	return 0;	
+	return 0;
 }
 
 static pj_bool_t is_7bit_compatible(const unsigned short *in, size_t inlen)
