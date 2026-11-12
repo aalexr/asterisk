@@ -612,6 +612,21 @@
 						<enum name="remote_tag">
 							<para>Tag in To header</para>
 						</enum>
+						<enum name="remote_sdp_codecs">
+							<para>Codecs of the remote party's audio stream in its SDP, in
+							<literal>m=</literal> line order, as a comma-separated list such as
+							<literal>EVS/16000,AMR-WB/16000,PCMA/8000,telephone-event/16000</literal>.
+							On an incoming call this is the caller's offer, on an outgoing call
+							the answer. Empty without SDP.</para>
+						</enum>
+						<enum name="remote_sdp_bw">
+							<para>The <literal>b=</literal> lines of that audio stream (or of the
+							session if it has none), such as <literal>AS:88,RS:0</literal>.</para>
+						</enum>
+						<enum name="local_sdp_codecs">
+							<para>Codecs of our own negotiated SDP (on an incoming call, our
+							answer), in the same form as <literal>remote_sdp_codecs</literal>.</para>
+						</enum>
 						<enum name="request_uri">
 							<para>The request URI of the incoming <literal>INVITE</literal>
 							associated with the creation of this channel.</para>
