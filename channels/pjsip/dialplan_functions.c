@@ -31,6 +31,8 @@
 
 #include "asterisk.h"
 
+#include <ctype.h>
+
 #include <pjsip.h>
 #include <pjlib.h>
 #include <pjsip_ua.h>
@@ -282,6 +284,106 @@ static int print_escaped_uri(struct ast_channel *chan, const char *type,
 }
 
 /*!
+ * \internal \brief VOWIFI: append one item to a comma-separated list, mapping every character
+ * outside [A-Za-z0-9/._+:-] to '_' (the values come from the network's SDP and end up in the
+ * dialplan, e.g. as TrySystem arguments).
+ */
+static void sdp_list_append(char *buf, size_t buflen, const char *item)
+{
+	size_t len = strlen(buf);
+	const char *c;
+
+	if (len && len + 1 < buflen) {
+		buf[len++] = ',';
+	}
+	for (c = item; *c && len + 1 < buflen; c++) {
+		buf[len++] = (isalnum((unsigned char) *c) || strchr("/._+:-", *c)) ? *c : '_';
+	}
+	buf[len] = '\0';
+}
+
+/*!
+ * \internal \brief VOWIFI: the first active audio stream of an SDP, as its codecs
+ * ("EVS/16000,AMR-WB/16000,PCMA/8000,telephone-event/16000", in m= line order; a static
+ * payload type without rtpmap by its RFC 3551 name) or, with \a want_bw, its b= lines
+ * ("AS:88,RS:0"; the session-level ones if the stream has none).
+ */
+static void print_sdp_audio(const pjmedia_sdp_session *sdp, int want_bw, char *buf, size_t buflen)
+{
+	static const char *static_pt[] = {
+		[0] = "PCMU/8000", [3] = "GSM/8000", [4] = "G723/8000", [8] = "PCMA/8000",
+		[9] = "G722/8000", [18] = "G729/8000",
+	};
+	char item[64];
+	unsigned i, j;
+
+	buf[0] = '\0';
+	for (i = 0; i < sdp->media_count; i++) {
+		const pjmedia_sdp_media *m = sdp->media[i];
+
+		if (pj_stricmp2(&m->desc.media, "audio") || m->desc.port == 0) {
+			continue;
+		}
+		if (want_bw) {
+			pjmedia_sdp_bandw * const *bw = m->bandw_count ? m->bandw : sdp->bandw;
+			unsigned count = m->bandw_count ? m->bandw_count : sdp->bandw_count;
+
+			for (j = 0; j < count; j++) {
+				snprintf(item, sizeof(item), "%.*s:%u", (int) bw[j]->modifier.slen,
+					bw[j]->modifier.ptr, (unsigned) bw[j]->value);
+				sdp_list_append(buf, buflen, item);
+			}
+			return;
+		}
+		for (j = 0; j < m->desc.fmt_count; j++) {
+			const pj_str_t *fmt = &m->desc.fmt[j];
+			pjmedia_sdp_attr *attr = pjmedia_sdp_media_find_attr2(m, "rtpmap", fmt);
+			pjmedia_sdp_rtpmap rtpmap;
+			unsigned long pt = pj_strtoul(fmt);
+
+			if (attr && pjmedia_sdp_attr_get_rtpmap(attr, &rtpmap) == PJ_SUCCESS) {
+				snprintf(item, sizeof(item), "%.*s/%u", (int) rtpmap.enc_name.slen,
+					rtpmap.enc_name.ptr, rtpmap.clock_rate);
+			} else if (pt < ARRAY_LEN(static_pt) && static_pt[pt]) {
+				ast_copy_string(item, static_pt[pt], sizeof(item));
+			} else {
+				snprintf(item, sizeof(item), "pt%.*s", (int) fmt->slen, fmt->ptr);
+			}
+			sdp_list_append(buf, buflen, item);
+		}
+		return;
+	}
+}
+
+/*!
+ * \internal \brief VOWIFI: CHANNEL(pjsip,remote_sdp_codecs|remote_sdp_bw|local_sdp_codecs).
+ * Reads the session's SDP negotiator: the active (negotiated) SDP, or for the remote side a
+ * pending offer not answered yet. On an incoming call the remote SDP is the caller's offer
+ * (every codec the network accepts); on an outgoing call it is the network's answer.
+ * Empty when there is no SDP (yet).
+ */
+static void channel_read_sdp(struct ast_sip_session *session, const char *type, char *buf, size_t buflen)
+{
+	pjmedia_sdp_neg *neg = session->inv_session ? session->inv_session->neg : NULL;
+	const pjmedia_sdp_session *sdp = NULL;
+	int local = !strcmp(type, "local_sdp_codecs");
+
+	buf[0] = '\0';
+	if (!neg) {
+		return;
+	}
+	if (local) {
+		pjmedia_sdp_neg_get_active_local(neg, &sdp);
+	} else if (pjmedia_sdp_neg_get_active_remote(neg, &sdp) != PJ_SUCCESS || !sdp) {
+		sdp = NULL;
+		pjmedia_sdp_neg_get_neg_remote(neg, &sdp);
+	}
+	if (sdp) {
+		print_sdp_audio(sdp, !strcmp(type, "remote_sdp_bw"), buf, buflen);
+	}
+}
+
+/*!
  * \internal \brief Handle reading signalling information
  */
 static int channel_read_pjsip(struct ast_channel *chan, const char *type, const char *field, char *buf, size_t buflen)
@@ -294,6 +396,12 @@ static int channel_read_pjsip(struct ast_channel *chan, const char *type, const 
 	if (!channel) {
 		ast_log(AST_LOG_WARNING, "Channel %s has no pvt!\n", ast_channel_name(chan));
 		return -1;
+	}
+
+	if (type && (!strcmp(type, "remote_sdp_codecs") || !strcmp(type, "remote_sdp_bw")
+		|| !strcmp(type, "local_sdp_codecs"))) {
+		channel_read_sdp(channel->session, type, buf, buflen);
+		return 0;
 	}
 
 	dlg = channel->session->inv_session->dlg;
