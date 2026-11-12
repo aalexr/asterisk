@@ -817,7 +817,8 @@ if (tta.which.set && ttb.which.set) { \
 
 static evs_attr default_attrib = {
 	// SET_E_AT(ftmp_hf_only, 1)
-	SET_E_ATR1(ftmp_range_br, DEF_ftmp_br5_9)
+	/* what codec_vevs can encode from 16 kHz slin (EVS WB tops out usefully at 24.4) */
+	SET_E_ATR2(ftmp_range_br, DEF_ftmp_br5_9, DEF_ftmp_br24_4)
 	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwwb)
 	SET_E_AT(ftmp_dtx, 1)
 	SET_E_AT(ftmp_max_red, 0)
@@ -921,12 +922,64 @@ static enum ast_format_cmp_res evs_cmp(const struct ast_format *format1, const s
 	return AST_FORMAT_CMP_NOT_EQUAL;
 }
 
+/* br/bw ranges as [lo, hi] enum values; an absent parameter allows everything */
+static void evs_br_range(const struct evs_attr *a, int *lo, int *hi)
+{
+	*lo = DEF_ftmp_br5_9;
+	*hi = DEF_ftmp_br128;
+	if (a->ftmp_range_br.a.set) {
+		*lo = *hi = a->ftmp_range_br.a.val;
+		if (a->ftmp_range_br.b.set) {
+			*hi = a->ftmp_range_br.b.val;
+		}
+	}
+}
+
+static void evs_bw_one(int v, int *lo, int *hi)
+{
+	switch (v) {
+	case DEF_ftmp_bwnb_wb: *lo = DEF_ftmp_bwnb; *hi = DEF_ftmp_bwwb; break;
+	case DEF_ftmp_bwnb_swb: *lo = DEF_ftmp_bwnb; *hi = DEF_ftmp_bwswb; break;
+	case DEF_ftmp_bwnb_fb: *lo = DEF_ftmp_bwnb; *hi = DEF_ftmp_bwfb; break;
+	default: *lo = *hi = v; break;
+	}
+}
+
+static void evs_bw_range(const struct evs_attr *a, int *lo, int *hi)
+{
+	int l2, h2;
+	*lo = DEF_ftmp_bwnb;
+	*hi = DEF_ftmp_bwfb;
+	if (a->ftmp_range_bw.a.set) {
+		evs_bw_one(a->ftmp_range_bw.a.val, lo, hi);
+		if (a->ftmp_range_bw.b.set) {
+			evs_bw_one(a->ftmp_range_bw.b.val, &l2, &h2);
+			(void)l2;
+			*hi = h2;
+		}
+	}
+}
+
+/*
+ * Joint EVS parameters (TS 26.445 A.3.3): the result is what our answer carries
+ * and what codec_vevs configures its encoder with.
+ *  - br: intersection of both ranges, narrowed to ONE rate: 13.2 kbps (the
+ *    GSMA IR.92 default) if allowed, else the allowed rate closest to it. No
+ *    overlap means EVS is unusable with this peer (NULL = not compatible).
+ *  - bw: intersection of both ranges. Without overlap (e.g. an offer with
+ *    bw=swb only, which a 16 kHz slin path cannot fill) the narrowest band the
+ *    peer asks for is kept rather than dropping EVS: the decoder handles any
+ *    bandwidth and EVS Primary frames signal their audio bandwidth in-band.
+ *  - dtx: only if neither side said dtx=0 (default is 1).
+ *  - hf-only: if either side requires it.
+ */
 static struct ast_format *evs_getjoint(const struct ast_format *format1, const struct ast_format *format2)
 {
 	struct evs_attr *attr1 = ast_format_get_attribute_data(format1);
 	struct evs_attr *attr2 = ast_format_get_attribute_data(format2);
 	struct evs_attr *attr_res;
 	struct ast_format *jointformat = NULL;
+	int lo1, hi1, lo2, hi2, lo, hi, br;
 
 	if (!attr1) {
 		attr1 = &default_attrib;
@@ -936,25 +989,53 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 		attr2 = &default_attrib;
 	}
 
-  jointformat = ast_format_clone(format1);
+	evs_br_range(attr1, &lo1, &hi1);
+	evs_br_range(attr2, &lo2, &hi2);
+	lo = MAX(lo1, lo2);
+	hi = MIN(hi1, hi2);
+	if (lo > hi) {
+		wrap_ast_fprintf("ftmp joint: no common EVS bit rate\n");
+		return NULL;
+	}
+	br = DEF_ftmp_br13_2;
+	if (br < lo) {
+		br = lo;
+	}
+	if (br > hi) {
+		br = hi;
+	}
 
+	jointformat = ast_format_clone(format1);
+	if (!jointformat) {
+		return NULL;
+	}
 	attr_res = ast_format_get_attribute_data(jointformat);
 
-  attr_res->ftmp_hf_only.val = MAX(attr1->ftmp_hf_only.val,attr2->ftmp_hf_only.val);
-  attr_res->ftmp_hf_only.set = MAX(attr1->ftmp_hf_only.set,attr2->ftmp_hf_only.set);
+	attr_res->ftmp_range_br.a.set = 1;
+	attr_res->ftmp_range_br.a.val = br;
+	attr_res->ftmp_range_br.b.set = 0;
 
-  attr_res->ftmp_dtx.val = MAX(attr1->ftmp_dtx.val,attr2->ftmp_dtx.val);
-  attr_res->ftmp_dtx.set = MAX(attr1->ftmp_dtx.set,attr2->ftmp_dtx.set);
+	evs_bw_range(attr1, &lo1, &hi1);
+	evs_bw_range(attr2, &lo2, &hi2);
+	lo = MAX(lo1, lo2);
+	hi = MIN(hi1, hi2);
+	if (lo > hi) {
+		lo = hi = MAX(lo1, lo2);
+	}
+	attr_res->ftmp_range_bw.a.set = 1;
+	attr_res->ftmp_range_bw.a.val = lo;
+	attr_res->ftmp_range_bw.b.set = lo != hi;
+	attr_res->ftmp_range_bw.b.val = hi;
 
-  AT_CMP_RANGE(attr_res->ftmp_range_br, attr1->ftmp_range_br, attr2->ftmp_range_br)
-  AT_CMP_RANGE(attr_res->ftmp_range_bw, attr1->ftmp_range_bw, attr2->ftmp_range_bw)
-  /* Limit bitrate to 5.9. */
-  attr_res->ftmp_range_br.a.set = 1;
-  attr_res->ftmp_range_br.a.val = DEF_ftmp_br5_9;
-  attr_res->ftmp_range_br.b.set = 0;
+	attr_res->ftmp_hf_only.val = MAX(attr1->ftmp_hf_only.val,attr2->ftmp_hf_only.val);
+	attr_res->ftmp_hf_only.set = MAX(attr1->ftmp_hf_only.set,attr2->ftmp_hf_only.set);
 
-  attr_res->ftmp_max_red.val = MIN(attr1->ftmp_max_red.val,attr2->ftmp_max_red.val);
-  attr_res->ftmp_max_red.set = MAX(attr1->ftmp_max_red.set,attr2->ftmp_max_red.set);
+	attr_res->ftmp_dtx.val = !((attr1->ftmp_dtx.set && !attr1->ftmp_dtx.val) ||
+		(attr2->ftmp_dtx.set && !attr2->ftmp_dtx.val));
+	attr_res->ftmp_dtx.set = 1;
+
+	attr_res->ftmp_max_red.val = MIN(attr1->ftmp_max_red.val,attr2->ftmp_max_red.val);
+	attr_res->ftmp_max_red.set = MAX(attr1->ftmp_max_red.set,attr2->ftmp_max_red.set);
 
 
   wrap_ast_fprintf( "ftmp joint\n");

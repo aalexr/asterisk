@@ -13,13 +13,13 @@
 	<depend>vevs</depend>
  ***/
 
+#include "asterisk.h" /* first: sets the feature macros lock.h relies on */
+
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <sys/types.h>
-
-#include "asterisk.h"
 
 #include "asterisk/translate.h"
 #include "asterisk/rtp_engine.h"
@@ -35,28 +35,15 @@
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-function"
 
-#if 0
-// minimum set of defines to make mockup happy
-#define EVS_BW_NB  0u
-#define EVS_BW_WB  1u
-#define EVS_SF_8K  8000u
-#define EVS_SF_16K 16000u
-#define EVS_BR_5k90  5900u
-
-
-#define BUFFER_SAMPLES	5760
-
-
-
-typedef unsigned char uint8;
-typedef unsigned short uint16;
-typedef signed short sint15;
-typedef unsigned int uint32;
-typedef signed int sint31;
-typedef unsigned long long uint64;
-typedef long long sint63;
-typedef uint16 vbool;
-
+/*
+ * Codec backend. By default the module loads libvocal.so in-process with
+ * dlopen() (any library implementing the Vocal EVS API below; the VoWiFi
+ * gateway builds one from the 3GPP reference code). Building with
+ * -DVEVS_USE_CODEC_SERVER instead talks to codec_server/cserver over a UNIX
+ * socket. Without a library the module declines to load: there is no mock
+ * any more, it produced undecodable frames.
+ */
+#ifndef VEVS_USE_CODEC_SERVER
 typedef void *(*xvocal_allocate_data)(void);
 typedef void (*xvocal_destroy_data)(void *vocal_data);
 typedef uint32 (*xvocal_get_data_size)(void);
@@ -71,16 +58,13 @@ typedef int (*xvocal_evs_process_decoder)(sint15 *dec_samples, uint16 max_sample
 typedef int (*xvocal_evs_close_decoder)(void);
 
 #define STR(x) "\"" #x "\""
-#define IMP(xx)                       \
-  char *xx##_old_err = dlerror();     \
-  xx = (x##xx)dlsym(lib_handle, #xx); \
-  xx##_old_err = dlerror();           \
-  if (xx##_old_err) {                 \
-    perror(xx##_old_err);             \
-    exit(1);                          \
+#define IMP(xx)                                                            \
+  dlerror();                                                               \
+  xx = (x##xx)dlsym(lib_handle, #xx);                                      \
+  if (!xx) {                                                               \
+    ast_log(LOG_ERROR, "libvocal.so lacks %s: %s\n", #xx, S_OR(dlerror(), "")); \
+    goto import_failed;                                                    \
   }
-
-#define MOCK(xx) xx = mock_##xx;
 
 #define DD(xx) static x##xx xx;
 
@@ -98,59 +82,37 @@ DD(vocal_evs_close_decoder)
 
 static void *lib_handle = 0;
 
-static void *mock_vocal_allocate_data(void) { return (void *)4321; }
-static void mock_vocal_destroy_data(void *vocal_data) { return; }
-static uint32 mock_vocal_get_data_size(void) { return 1234; }
-static void mock_vocal_set_data(void *vocal_data) { return; }
-static int mock_vocal_evs_init_coder(uint16 bandwidth, uint16 sampling_frequency, uint32 bitrate, vbool dtx_enable) {
-  return 320;
-}
-static int mock_vocal_evs_process_coder(uint8 *enc_data, uint16 enc_data_size, const sint15 *enc_samples,
-                                        uint16 sample_count) {
-  return 56; /* prim 2.8 */
-}
-static int mock_vocal_evs_close_coder(void) { return 0; }
-static int mock_vocal_evs_init_decoder(uint16 sampling_frequency) { return 320; }
-static int mock_vocal_evs_process_decoder(sint15 *dec_samples, uint16 max_sample_count, uint8 *dec_data,
-                                          uint16 dec_data_bit_count, vbool bad_frame) {
-  return 320;
-}
-static int mock_vocal_evs_close_decoder(void) { return 0; }
+/* Serialises vocal_set_data() + the call it selects: a libvocal may keep the
+ * selected instance in a process-wide variable, and translators of different
+ * channels run on different threads. */
+AST_MUTEX_DEFINE_STATIC(vocal_lock);
 
 static int w_alloc_vocal(void) {
-  char *errs = dlerror(); // flush
+  dlerror(); // flush
   lib_handle = dlopen("libvocal.so", RTLD_LOCAL | RTLD_NOW);
-  errs = dlerror();
-  if (errs || !lib_handle) {
-    perror(dlerror());
-    ast_log(LOG_ERROR, "EVS CODEC NOT FOUND: USING MOCKUP!\n");
-    // exit(1);
-    MOCK(vocal_allocate_data)
-    MOCK(vocal_destroy_data)
-    MOCK(vocal_set_data)
-
-    MOCK(vocal_evs_init_coder)
-    MOCK(vocal_evs_process_coder)
-    MOCK(vocal_evs_close_coder)
-
-    MOCK(vocal_evs_init_decoder)
-    MOCK(vocal_evs_process_decoder)
-    MOCK(vocal_evs_close_decoder)
-  } else {
-    IMP(vocal_allocate_data)
-    IMP(vocal_destroy_data)
-    IMP(vocal_set_data)
-
-    IMP(vocal_evs_init_coder)
-    IMP(vocal_evs_process_coder)
-    IMP(vocal_evs_close_coder)
-
-    IMP(vocal_evs_init_decoder)
-    IMP(vocal_evs_process_decoder)
-    IMP(vocal_evs_close_decoder)
+  if (!lib_handle) {
+    ast_log(LOG_ERROR, "EVS codec library libvocal.so not loadable (%s): EVS transcoding unavailable\n",
+            S_OR(dlerror(), "?"));
+    return -1;
   }
+  IMP(vocal_allocate_data)
+  IMP(vocal_destroy_data)
+  IMP(vocal_set_data)
+
+  IMP(vocal_evs_init_coder)
+  IMP(vocal_evs_process_coder)
+  IMP(vocal_evs_close_coder)
+
+  IMP(vocal_evs_init_decoder)
+  IMP(vocal_evs_process_decoder)
+  IMP(vocal_evs_close_decoder)
   ast_log(LOG_DEBUG, "funcptr init!\n");
   return 0;
+
+import_failed:
+  dlclose(lib_handle);
+  lib_handle = 0;
+  return -1;
 }
 
 static int w_close_vocal(void) {
@@ -163,11 +125,14 @@ static int w_close_vocal(void) {
 // static void* vdata = (void*)0; // mutex!
 static int dl_refcount = 0; // mutex!
 
-static void maybe_load_codeclib(void) {
+static int maybe_load_codeclib(void) {
   if (dl_refcount == 0 && lib_handle == 0) {
-    w_alloc_vocal();
+    if (w_alloc_vocal()) {
+      return -1;
+    }
   }
   dl_refcount++;
+  return 0;
 }
 static void maybe_unload_codeclib(void) {
   dl_refcount--;
@@ -176,7 +141,7 @@ static void maybe_unload_codeclib(void) {
   }
 }
 #else
-#define maybe_load_codeclib()
+#define maybe_load_codeclib() 0
 #define maybe_unload_codeclib()
 #endif
 
@@ -700,50 +665,83 @@ struct evs_dec_pvt {
 	int chunk;			/* Size of chunk to decode (in samples) */
 };
 
-#if 0
+#ifndef VEVS_USE_CODEC_SERVER
 static int wrap_vocal_evs_init_coder(evs_enc_ctx_t *ctx, uint16 bandwidth, uint16 sampling_frequency, uint32 bitrate,
                                      vbool dtx_enable) {
+  int r;
   ctx->vdata = vocal_allocate_data();
   if (ctx->vdata == NULL) {
     return -1;
   }
+  ast_mutex_lock(&vocal_lock);
   vocal_set_data(ctx->vdata);
-  int r = vocal_evs_init_coder(bandwidth, sampling_frequency, bitrate, dtx_enable);
+  r = vocal_evs_init_coder(bandwidth, sampling_frequency, bitrate, dtx_enable);
+  ast_mutex_unlock(&vocal_lock);
+  if (r <= 0) {
+    vocal_destroy_data(ctx->vdata);
+    ctx->vdata = NULL;
+  }
   return r;
 }
 static int wrap_vocal_evs_process_coder(evs_enc_ctx_t *ctx, uint8 *enc_data, uint16 enc_data_size,
                                         const sint15 *enc_samples, uint16 sample_count) {
+  int r;
+  ast_mutex_lock(&vocal_lock);
   vocal_set_data(ctx->vdata);
-  int r = vocal_evs_process_coder(enc_data, enc_data_size, enc_samples, sample_count);
+  r = vocal_evs_process_coder(enc_data, enc_data_size, enc_samples, sample_count);
+  ast_mutex_unlock(&vocal_lock);
   return r;
 }
 static int wrap_vocal_evs_close_coder(evs_enc_ctx_t *ctx) {
+  if (!ctx->vdata) {
+    return 0;
+  }
+  ast_mutex_lock(&vocal_lock);
+  vocal_set_data(ctx->vdata);
   vocal_evs_close_coder();
+  ast_mutex_unlock(&vocal_lock);
   vocal_destroy_data(ctx->vdata);
+  ctx->vdata = NULL;
   return 0;
 }
 
 static int wrap_vocal_evs_init_decoder(evs_dec_ctx_t *ctx, uint16 sampling_frequency) {
+  int r;
   ctx->vdata = vocal_allocate_data();
   if (ctx->vdata == NULL) {
-
     return -1;
   }
+  ast_mutex_lock(&vocal_lock);
   vocal_set_data(ctx->vdata);
-  int r = vocal_evs_init_decoder(sampling_frequency);
+  r = vocal_evs_init_decoder(sampling_frequency);
+  ast_mutex_unlock(&vocal_lock);
+  if (r <= 0) {
+    vocal_destroy_data(ctx->vdata);
+    ctx->vdata = NULL;
+  }
   return r;
 }
 
 static int wrap_vocal_evs_process_decoder(evs_dec_ctx_t *ctx, sint15 *dec_samples, uint16 max_sample_count,
                                           uint8 *dec_data, uint16 dec_data_size, bool bad_frame) {
+  int r;
+  ast_mutex_lock(&vocal_lock);
   vocal_set_data(ctx->vdata);
-  int r = vocal_evs_process_decoder(dec_samples, max_sample_count, dec_data, dec_data_size, bad_frame);
+  r = vocal_evs_process_decoder(dec_samples, max_sample_count, dec_data, dec_data_size, bad_frame);
+  ast_mutex_unlock(&vocal_lock);
   return r;
 }
 
 static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
+  if (!ctx->vdata) {
+    return 0;
+  }
+  ast_mutex_lock(&vocal_lock);
+  vocal_set_data(ctx->vdata);
   vocal_evs_close_decoder();
+  ast_mutex_unlock(&vocal_lock);
   vocal_destroy_data(ctx->vdata);
+  ctx->vdata = NULL;
   return 0;
 }
 #else
@@ -878,20 +876,64 @@ static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
 
 /* Create and destroy codec intances */
 
+/* enum ftmp_br / ftmp_bw of res_format_attr_vevs.c, in bit/s and EVS_BW_* */
+static const uint32 evs_br_bps[] = {5900, 7200, 8000, 9600, 13200, 16400, 24400, 32000, 48000, 64000, 96000, 128000};
+#define EVS_BR_IDX_13_2 4
+/* nb, wb, swb, fb, nb-wb, nb-swb, nb-fb -> widest bandwidth */
+static const uint16 evs_bw_max[] = {0, 1, 2, 3, 1, 2, 3};
+
+/*
+ * Encoder configuration from the negotiated (joint) fmtp. res_format_attr_vevs
+ * narrows br to the single rate we send; should a range still arrive, use
+ * 13.2 kbps (the IR.92 default) or the closest rate inside it. Bandwidth is the
+ * widest one allowed (the 16 kHz slin input limits it to WB anyway); DTX is on
+ * unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
+ */
+static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx) {
+  int lo = EVS_BR_IDX_13_2, hi = EVS_BR_IDX_13_2, idx = EVS_BR_IDX_13_2;
+  int bw = EVS_BW_WB;
+
+  if (attr && attr->ftmp_range_br.a.set) {
+    lo = hi = attr->ftmp_range_br.a.val;
+    if (attr->ftmp_range_br.b.set) {
+      hi = attr->ftmp_range_br.b.val;
+    }
+  }
+  if (lo < 0 || lo >= (int)ARR_SZ(evs_br_bps)) lo = EVS_BR_IDX_13_2;
+  if (hi < lo || hi >= (int)ARR_SZ(evs_br_bps)) hi = lo;
+  if (idx < lo) idx = lo;
+  if (idx > hi) idx = hi;
+
+  if (attr && attr->ftmp_range_bw.a.set) {
+    int v = attr->ftmp_range_bw.b.set ? attr->ftmp_range_bw.b.val : attr->ftmp_range_bw.a.val;
+    if (v >= 0 && v < (int)ARR_SZ(evs_bw_max)) bw = evs_bw_max[v];
+  }
+
+  *bitrate = evs_br_bps[idx];
+  *bandwidth = bw;
+  *dtx = !(attr && attr->ftmp_dtx.set && attr->ftmp_dtx.val == 0);
+}
+
 static int evs_enc_new(struct ast_trans_pvt *pvt) {
   struct evs_enc_pvt *enc = pvt->pvt;
   const unsigned int sample_rate = pvt->t->src_codec.sample_rate;
-  // struct evs_attr *attr = pvt->explicit_dst ? ast_format_get_attribute_data(pvt->explicit_dst) : NULL;
+  struct evs_attr *attr = pvt->explicit_dst ? ast_format_get_attribute_data(pvt->explicit_dst) : NULL;
+  uint32 bitrate;
+  uint16 bandwidth;
+  bool dtx;
   int rc;
 
   memset(enc, 0, sizeof(*enc));
-  rc = wrap_vocal_evs_init_coder(&enc->enc, EVS_BW_WB, EVS_SF_16K, EVS_BR_5k90, true);
+  evs_enc_params(attr, &bitrate, &bandwidth, &dtx);
+  rc = wrap_vocal_evs_init_coder(&enc->enc, bandwidth, EVS_SF_16K, bitrate, dtx);
   if (rc <= 0) {
-    ast_log(LOG_ERROR, "Error creating the Vocal EVS encoder\n");
+    ast_log(LOG_ERROR, "Error creating the Vocal EVS encoder (%u bit/s, bw %u, dtx %d)\n", (unsigned)bitrate,
+            bandwidth, dtx);
     return -1;
   }
   enc->chunk = rc;
-  ast_debug(3, "Created encoder (Vocal EVS) with sample rate %d\n", sample_rate);
+  ast_debug(3, "Created encoder (Vocal EVS) with sample rate %d: %u bit/s, bw %u, dtx %d\n", sample_rate,
+            (unsigned)bitrate, bandwidth, dtx);
   return 0;
 }
 
@@ -960,7 +1002,7 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
     if (do_hf_full) {
       out++;
       out++;
-      *cmr = 0xa0;
+      *cmr = 0xff; /* CMR byte: H=1, T=111, D=1111 = NO_REQ */
       *toc = 0x00;
     }
 
@@ -1031,6 +1073,52 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
 	return result;
 }
 
+/* TS 26.445 Table A.1/A.2: frame bits per EVS Primary / AMR-WB IO frame type */
+static int evs_primary_bits(int ft) {
+  static const short b[16] = {56, 144, 160, 192, 264, 328, 488, 640, 960, 1280, 1920, 2560, 48, -1, -1, 0};
+  return ft == 14 ? -1 : b[ft & 0xf]; /* 14 = SPEECH_LOST, 15 = NO_DATA */
+}
+static int evs_io_bits(int ft) {
+  static const short b[16] = {132, 177, 253, 285, 317, 365, 397, 461, 477, 35, -1, -1, -1, -1, -1, 0};
+  return b[ft & 0xf];
+}
+
+/* compact AMR-WB IO payload size (bits) -> frame bits, 0 if not one */
+static int evs_compact_io_bits(int payload_bits) {
+  switch (payload_bits) {
+    case 136: return 132;
+    case 184: return 177;
+    case 256: return 253;
+    case 288: return 285;
+    case 320: return 317;
+    case 368: return 365;
+    case 400: return 397;
+    case 464: return 461;
+    case 480: return 477;
+    default: return 0;
+  }
+}
+
+/* compact EVS Primary sizes; 56 bit with the first bit set is the header-full
+ * AMR-WB IO SID with CMR instead (A.2.1.3) */
+static bool evs_is_compact_primary(int payload_bits, unsigned char first) {
+  int out_br;
+  return get_comp_type(payload_bits, first, &out_br) == EVS_Primary;
+}
+
+static int evs_getbit(const unsigned char *p, int i) { return (p[i / 8] >> (7 - i % 8)) & 1; }
+
+/* compact IO: frame bit k (k >= 1) is payload bit k+2 (after the 3 bit CMR),
+ * d(0) follows the last data bit */
+static void evs_unpack_compact_io(const unsigned char *in, int k_bits, unsigned char *out) {
+  int k;
+  memset(out, 0, (k_bits + 7) / 8);
+  for (k = 0; k < k_bits; k++) {
+    int src = k == 0 ? k_bits + 2 : k + 2;
+    if (evs_getbit(in, src)) out[k / 8] |= 0x80 >> (k % 8);
+  }
+}
+
 static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct evs_dec_pvt *dec = pvt->pvt;
@@ -1055,44 +1143,57 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 			return -1;
 		}
 	} else {
-    unsigned char *actual_pl_ptr = in;
-    int exp_pl_len_in_bits = f->datalen*8;
+		/* frame for the decoder: raw EVS bits, MSB first (see libvocal API) */
+		unsigned char io_frame[64];
+		unsigned char *frame = in;
+		int frame_bits = -1; /* -1: unusable, 0: NO_DATA */
+		int bits = f->datalen * 8;
+		bool bad = false;
 
-    if (!do_hf_full) {
-      int out_br = 0;
-      enum COMPACT_T enc_ct = get_comp_type(exp_pl_len_in_bits, in[0], &out_br);
-      if (enc_ct != EVS_Primary) // INVALID_COMPACT_MODE -> hf
-        do_hf_full = 1;
-    }
+		if (!do_hf_full && evs_compact_io_bits(bits) > 0) {
+			/* A.2.2.1.2 compact AMR-WB IO: 3 bit CMR | d(1)..d(K-1) | d(0) | pad */
+			frame_bits = evs_compact_io_bits(bits);
+			evs_unpack_compact_io(in, frame_bits, io_frame);
+			frame = io_frame;
+		} else if (!do_hf_full && evs_is_compact_primary(bits, in[0])) {
+			frame_bits = bits; /* A.2.2.1.1 compact EVS Primary: the frame itself */
+		} else {
+			/* A.2.2.2 header-full: [CMR] ToC... frame data */
+			int idx = (in[0] & 0x80) ? 1 : 0; /* skip CMR */
+			if (idx < f->datalen && !(in[idx] & 0x80)) {
+				unsigned char toc = in[idx];
+				int io = toc & 0x20, ft = toc & 0x0f;
+				int avail = (f->datalen - idx - 1) * 8;
 
-    if (do_hf_full) {
-      unsigned int toc_byte = in[0];
-      int toc_byte_idx = 0;
+				if (toc & 0x40) {
+					ast_debug(3, "EVS: %d-byte payload holds several frames, decoding the first\n", f->datalen);
+				}
+				frame_bits = io ? evs_io_bits(ft) : evs_primary_bits(ft);
+				if (io && !(toc & 0x10)) {
+					bad = true; /* Q bit: damaged frame */
+				}
+				/* the IO SID frame is followed by STI + 4 CMI bits */
+				if (frame_bits > 0 && avail < (frame_bits == 35 ? 40 : frame_bits)) {
+					frame_bits = -1;
+				}
+				frame = in + idx + 1;
+			}
+		}
 
-      if (toc_byte & 0x80) {
-        // pr_T_D(toc_byte);
-        toc_byte_idx++;
-      }
-      toc_byte = in[toc_byte_idx];
-      // pr_TOC(toc_byte);
-
-      int actual_rx_data_len_in_bits = (f->datalen-(toc_byte_idx+1))*8;
-
-
-      exp_pl_len_in_bits = lookup_fh_sizes_evs(toc_byte & 0x0f);
-      if (actual_rx_data_len_in_bits !=  exp_pl_len_in_bits)
-        ast_log(LOG_ERROR, "got f %d %d -> %d %d ?\n", f->datalen, f->samples, actual_rx_data_len_in_bits, exp_pl_len_in_bits);
-
-      //  actual_pl_ptr += toc_byte_idx +1;
-       actual_pl_ptr = in + toc_byte_idx +1;
-    }
-
-		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, actual_pl_ptr, exp_pl_len_in_bits, false);
+		if (frame_bits < 0) {
+			ast_debug(3, "EVS: undecodable %d-byte payload (0x%02x), concealing\n", f->datalen, in[0]);
+			bad = true;
+		}
+		if (bad || frame_bits <= 0) {
+			/* lost/damaged/NO_DATA: the decoder conceals or continues comfort noise */
+			rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, 0, 0, true);
+		} else {
+			rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, frame, frame_bits, false);
+		}
 		if (rc <= 0) {
 			ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder\n");
 			return -1;
 		}
-		// ast_log(LOG_ERROR, "dec %d -> %d %ld %d\n", rc, pvt->datalen, pvt->f.ts, pvt->f.seqno);
 	}
 
 	if (rc != dec->chunk) {
@@ -1166,7 +1267,9 @@ static int unload_module(void)
 static int load_module(void)
 {
 	int res;
-  maybe_load_codeclib();
+	if (maybe_load_codeclib()) {
+		return AST_MODULE_LOAD_DECLINE;
+	}
 	res = ast_register_translator(&evstolin);
 	res |= ast_register_translator(&lintoevs);
   res |= ast_rtp_engine_load_format(ast_format_vevs);
