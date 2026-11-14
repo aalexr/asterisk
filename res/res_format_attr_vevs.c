@@ -820,7 +820,9 @@ static evs_attr default_attrib = {
 	/* what codec_vevs can encode from 16 kHz slin (EVS WB tops out usefully at 24.4) */
 	SET_E_ATR2(ftmp_range_br, DEF_ftmp_br5_9, DEF_ftmp_br24_4)
 	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwwb)
-	SET_E_AT(ftmp_dtx, 1)
+	/* No dtx= in our own offer: dtx=1 is the TS 26.445 A.3.1 default and phones
+	 * (iPhone: "br=5.9-24.4; bw=nb-swb; max-red=220") leave it out. The encoder
+	 * still uses DTX unless the peer says dtx=0 (evs_getjoint, codec_vevs). */
 	SET_E_AT(ftmp_max_red, 0)
 };
 
