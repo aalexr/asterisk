@@ -971,14 +971,19 @@ static void evs_bw_range(const struct evs_attr *a, int *lo, int *hi)
 /*
  * Joint EVS parameters (TS 26.445 A.3.3): the result is what our answer carries
  * and what codec_vevs configures its encoder with.
- *  - br: intersection of both ranges, narrowed to ONE rate: 13.2 kbps (the
- *    GSMA IR.92 default) if allowed, else the allowed rate closest to it. No
- *    overlap means EVS is unusable with this peer (NULL = not compatible).
+ *  - br: intersection of both ranges, kept as a range like phones do (an
+ *    iPhone answers "br=5.9-24.4" to that offer). Narrowing it to one rate made
+ *    our UPDATE after an iPhone's 183 carry "br=13.2", which is not what was
+ *    just agreed, and the call was terminated with 487 (MTS RU). codec_vevs
+ *    sends 13.2 kbps (the GSMA IR.92 default) or the closest rate inside the
+ *    range. No overlap means EVS is unusable with this peer (NULL).
  *  - bw: intersection of both ranges. Without overlap (e.g. an offer with
  *    bw=swb only, which a 16 kHz slin path cannot fill) the narrowest band the
  *    peer asks for is kept rather than dropping EVS: the decoder handles any
  *    bandwidth and EVS Primary frames signal their audio bandwidth in-band.
- *  - dtx: only if neither side said dtx=0 (default is 1).
+ *  - dtx: on unless a side said dtx=0 (default is 1); only written when a
+ *    side stated it.
+ *  - cmr, evs-mode-switch, ch-aw-recv: taken over from the side that set them.
  *  - hf-only: if either side requires it.
  */
 static struct ast_format *evs_getjoint(const struct ast_format *format1, const struct ast_format *format2)
@@ -987,7 +992,7 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 	struct evs_attr *attr2 = ast_format_get_attribute_data(format2);
 	struct evs_attr *attr_res;
 	struct ast_format *jointformat = NULL;
-	int lo1, hi1, lo2, hi2, lo, hi, br;
+	int lo1, hi1, lo2, hi2, lo, hi;
 
 	if (!attr1) {
 		attr1 = &default_attrib;
@@ -1005,23 +1010,17 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 		wrap_ast_fprintf("ftmp joint: no common EVS bit rate\n");
 		return NULL;
 	}
-	br = DEF_ftmp_br13_2;
-	if (br < lo) {
-		br = lo;
-	}
-	if (br > hi) {
-		br = hi;
-	}
-
 	jointformat = ast_format_clone(format1);
 	if (!jointformat) {
 		return NULL;
 	}
 	attr_res = ast_format_get_attribute_data(jointformat);
 
+	/* keep the common RANGE: codec_vevs picks the rate it sends inside it */
 	attr_res->ftmp_range_br.a.set = 1;
-	attr_res->ftmp_range_br.a.val = br;
-	attr_res->ftmp_range_br.b.set = 0;
+	attr_res->ftmp_range_br.a.val = lo;
+	attr_res->ftmp_range_br.b.set = lo != hi;
+	attr_res->ftmp_range_br.b.val = hi;
 
 	evs_bw_range(attr1, &lo1, &hi1);
 	evs_bw_range(attr2, &lo2, &hi2);
@@ -1038,9 +1037,25 @@ static struct ast_format *evs_getjoint(const struct ast_format *format1, const s
 	attr_res->ftmp_hf_only.val = MAX(attr1->ftmp_hf_only.val,attr2->ftmp_hf_only.val);
 	attr_res->ftmp_hf_only.set = MAX(attr1->ftmp_hf_only.set,attr2->ftmp_hf_only.set);
 
+	/* dtx only when one side said it; absent means dtx=1 (A.3.1) */
 	attr_res->ftmp_dtx.val = !((attr1->ftmp_dtx.set && !attr1->ftmp_dtx.val) ||
 		(attr2->ftmp_dtx.set && !attr2->ftmp_dtx.val));
-	attr_res->ftmp_dtx.set = 1;
+	attr_res->ftmp_dtx.set = attr1->ftmp_dtx.set || attr2->ftmp_dtx.set;
+
+	/* what only the other side stated is kept, so that our next offer in the
+	 * dialog (UPDATE, re-INVITE) repeats the peer's answer instead of our
+	 * initial offer; cmr=-1 (no CMR) wins over any other value */
+	if (!attr_res->ftmp_cmr.set && attr2->ftmp_cmr.set) {
+		attr_res->ftmp_cmr = attr2->ftmp_cmr;
+	} else if (attr1->ftmp_cmr.set && attr2->ftmp_cmr.set && attr2->ftmp_cmr.val == -1) {
+		attr_res->ftmp_cmr.val = -1;
+	}
+	if (!attr_res->ftmp_evs_mode_switch.set && attr2->ftmp_evs_mode_switch.set) {
+		attr_res->ftmp_evs_mode_switch = attr2->ftmp_evs_mode_switch;
+	}
+	if (!attr_res->ftmp_ch_aw_recv.set && attr2->ftmp_ch_aw_recv.set) {
+		attr_res->ftmp_ch_aw_recv = attr2->ftmp_ch_aw_recv;
+	}
 
 	attr_res->ftmp_max_red.val = MIN(attr1->ftmp_max_red.val,attr2->ftmp_max_red.val);
 	attr_res->ftmp_max_red.set = MAX(attr1->ftmp_max_red.set,attr2->ftmp_max_red.set);
