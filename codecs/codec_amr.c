@@ -33,8 +33,68 @@
 struct amr_coder_pvt {
 	void *state; /* May be encoder or decoder */
 	unsigned int frames;
+	int mode;                  /* encoder: mode of the last frame, -1 before the first */
+	unsigned int since_change; /* encoder: frames encoded since the last mode change */
 	int16_t buf[BUFFER_SAMPLES];
 };
+
+/*
+ * Pick the mode for the next encoded frame. 'wanted' is what the peer asked
+ * for (CMR) or the negotiated starting mode. RFC 4867 section 8.1:
+ *  - mode-set: only the listed modes may be sent;
+ *  - mode-change-period=2: mode changes at least two frames apart;
+ *  - mode-change-neighbor=1: only to a neighbouring mode of the mode-set.
+ * Networks interworking with circuit-switched AMR (3GPP TS 26.114 section 5.2.1)
+ * negotiate the last two, and we advertise mode-change-capability=2.
+ */
+static int amr_next_mode(struct amr_coder_pvt *apvt, const struct amr_attr *attr, int wanted, int highest)
+{
+	const unsigned int set = attr ? attr->mode_set : 0;
+	const unsigned int period = attr ? attr->mode_change_period : 0;
+	const unsigned int neighbor = attr ? attr->mode_change_neighbor : 0;
+	int target = wanted;
+	int mode;
+
+	if (target < 0) {
+		target = 0;
+	} else if (target > highest) {
+		target = highest;
+	}
+	if (set && !(set & (1u << target))) {
+		/* outside the mode-set: nearest allowed mode below, else the lowest allowed */
+		int m;
+
+		for (m = target; m >= 0 && !(set & (1u << m)); m--);
+		if (m < 0) {
+			for (m = target; m <= highest && !(set & (1u << m)); m++);
+		}
+		target = (m <= highest) ? m : wanted;
+	}
+
+	if (apvt->mode < 0) {
+		/* first frame: start where negotiated */
+		apvt->mode = target;
+		apvt->since_change = 0;
+		return apvt->mode;
+	}
+
+	apvt->since_change++;
+	if (target == apvt->mode || (period > 1 && apvt->since_change < period)) {
+		return apvt->mode;
+	}
+
+	mode = target;
+	if (neighbor) {
+		/* one step towards the target, to the next mode of the mode-set */
+		const int step = (target > apvt->mode) ? 1 : -1;
+
+		for (mode = apvt->mode + step; mode != target && set && !(set & (1u << mode)); mode += step);
+	}
+	apvt->mode = mode;
+	apvt->since_change = 0;
+
+	return apvt->mode;
+}
 
 static int lintoamr_new(struct ast_trans_pvt *pvt)
 {
@@ -56,6 +116,8 @@ static int lintoamr_new(struct ast_trans_pvt *pvt)
 	}
 
 	apvt->frames = 0;
+	apvt->mode = -1;
+	apvt->since_change = 0;
 	ast_debug(3, "Created encoder (%d -> AMR) %p (Format %p)\n", sample_rate, apvt, pvt->explicit_dst);
 
 	return 0;
@@ -107,11 +169,12 @@ static struct ast_frame *lintoamr_frameout(struct ast_trans_pvt *pvt)
 
 	struct amr_attr *attr = ast_format_get_attribute_data(pvt->f.subclass.format);
 	const int dtx = attr ? attr->vad : 0;
-	const int mode = attr ? attr->mode_current : 0;
+	const int wanted = attr ? attr->mode_current : 0;
 	const int aligned = attr ? attr->octet_align : 0;
 
 	while (pvt->samples >= frame_size) {
 		struct ast_frame *current;
+		const int mode = amr_next_mode(apvt, attr, wanted, (8000 == sample_rate) ? 7 : 8);
 		const int force_speech = 0; /* ignored by underlying API anyway */
 		const short *speech = apvt->buf + samples;
 		unsigned char *out = pvt->outbuf.uc + 1;

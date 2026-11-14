@@ -663,6 +663,8 @@ struct evs_enc_pvt {
 struct evs_dec_pvt {
 	evs_dec_ctx_t dec;		/* Decoder states */
 	int chunk;			/* Size of chunk to decode (in samples) */
+	long last_ts;			/* media time (ms) of the newest frame given to the decoder */
+	int have_last_ts;		/* last_ts is valid */
 };
 
 #ifndef VEVS_USE_CODEC_SERVER
@@ -879,21 +881,27 @@ static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
 /* enum ftmp_br / ftmp_bw of res_format_attr_vevs.c, in bit/s and EVS_BW_* */
 static const uint32 evs_br_bps[] = {5900, 7200, 8000, 9600, 13200, 16400, 24400, 32000, 48000, 64000, 96000, 128000};
 #define EVS_BR_IDX_13_2 4
+#define EVS_BR_IDX_24_4 6
 /* nb, wb, swb, fb, nb-wb, nb-swb, nb-fb -> widest bandwidth */
 static const uint16 evs_bw_max[] = {0, 1, 2, 3, 1, 2, 3};
 
 /*
- * Encoder configuration from the negotiated (joint) fmtp. res_format_attr_vevs
- * narrows br to the single rate we send; should a range still arrive, use
- * 13.2 kbps (the IR.92 default) or the closest rate inside it. Bandwidth is the
- * widest one allowed (the 16 kHz slin input limits it to WB anyway); DTX is on
- * unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
+ * Encoder configuration from the negotiated (joint) fmtp.
+ *  - Rate: the highest negotiated rate up to 24.4 kbps, what phones send for a
+ *    br=5.9-24.4 session (an iPhone on MTS RU: 61-byte frames) and the most a
+ *    wideband encoder gains from; our b=AS:49 is sized for it. If the peer
+ *    stated no br at all, 13.2 kbps (the GSMA IR.92 default): then nothing
+ *    says the bearer was sized for more.
+ *  - Bandwidth: the widest one allowed (the 16 kHz slin input limits it to WB
+ *    anyway).
+ *  - DTX: on unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
  */
 static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx) {
   int lo = EVS_BR_IDX_13_2, hi = EVS_BR_IDX_13_2, idx = EVS_BR_IDX_13_2;
   int bw = EVS_BW_WB;
 
   if (attr && attr->ftmp_range_br.a.set) {
+    idx = EVS_BR_IDX_24_4;
     lo = hi = attr->ftmp_range_br.a.val;
     if (attr->ftmp_range_br.b.set) {
       hi = attr->ftmp_range_br.b.val;
@@ -1119,91 +1127,181 @@ static void evs_unpack_compact_io(const unsigned char *in, int k_bits, unsigned 
   }
 }
 
-static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
+/* frames one RTP payload may carry: the new frame plus max-red=220 ms of
+ * redundancy/fillers (11 frames), with some slack */
+#define EVS_MAX_FRAMES_PER_PACKET 16
+#define EVS_FRAME_MS 20
+
+struct evs_rx_frame {
+	unsigned char *data;
+	int bits;	/* frame bits; 0: NO_DATA; -1: unusable */
+	bool bad;	/* damaged or lost: conceal */
+};
+
+/* One decoder step appended to the output buffer: a frame, or concealment /
+ * continued comfort noise when the frame is bad or carries no data. */
+static int evs_dec_feed(struct ast_trans_pvt *pvt, unsigned char *frame, int frame_bits, bool bad)
 {
 	struct evs_dec_pvt *dec = pvt->pvt;
 	int16_t *dst = pvt->outbuf.i16;
 	int rc;
-	unsigned char *in = f->data.ptr;
-  struct evs_attr *attr = pvt->explicit_src ? ast_format_get_attribute_data(pvt->explicit_src) : NULL;
-
-  int do_hf_full = attr && attr->ftmp_hf_only.set == 1 && attr->ftmp_hf_only.val == 1;
 
 	if (BUFFER_SAMPLES - pvt->samples < dec->chunk) {
 		ast_log(LOG_ERROR, "Out of buffer space\n");
 		return -1;
 	}
-
-	if (f->datalen == 0) {
+	if (bad || frame_bits <= 0) {
 		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, 0, 0, true);
-		// ast_log(LOG_ERROR, "concealed missing EVS frame with Vocal EVS decoder %d\n", f->seqno);
-		// ast_log(LOG_ERROR, "XXX %d -> %d %ld %d %d %ld\n", rc, pvt->datalen, pvt->f.ts, pvt->f.seqno, f->seqno, f->ts);
-		if (rc <= 0) {
-			ast_log(LOG_ERROR, "Error concealing missing EVS frame with Vocal EVS decoder\n");
-			return -1;
-		}
 	} else {
-		/* frame for the decoder: raw EVS bits, MSB first (see libvocal API) */
-		unsigned char io_frame[64];
-		unsigned char *frame = in;
-		int frame_bits = -1; /* -1: unusable, 0: NO_DATA */
-		int bits = f->datalen * 8;
-		bool bad = false;
-
-		if (!do_hf_full && evs_compact_io_bits(bits) > 0) {
-			/* A.2.2.1.2 compact AMR-WB IO: 3 bit CMR | d(1)..d(K-1) | d(0) | pad */
-			frame_bits = evs_compact_io_bits(bits);
-			evs_unpack_compact_io(in, frame_bits, io_frame);
-			frame = io_frame;
-		} else if (!do_hf_full && evs_is_compact_primary(bits, in[0])) {
-			frame_bits = bits; /* A.2.2.1.1 compact EVS Primary: the frame itself */
-		} else {
-			/* A.2.2.2 header-full: [CMR] ToC... frame data */
-			int idx = (in[0] & 0x80) ? 1 : 0; /* skip CMR */
-			if (idx < f->datalen && !(in[idx] & 0x80)) {
-				unsigned char toc = in[idx];
-				int io = toc & 0x20, ft = toc & 0x0f;
-				int avail = (f->datalen - idx - 1) * 8;
-
-				if (toc & 0x40) {
-					ast_debug(3, "EVS: %d-byte payload holds several frames, decoding the first\n", f->datalen);
-				}
-				frame_bits = io ? evs_io_bits(ft) : evs_primary_bits(ft);
-				if (io && !(toc & 0x10)) {
-					bad = true; /* Q bit: damaged frame */
-				}
-				/* the IO SID frame is followed by STI + 4 CMI bits */
-				if (frame_bits > 0 && avail < (frame_bits == 35 ? 40 : frame_bits)) {
-					frame_bits = -1;
-				}
-				frame = in + idx + 1;
-			}
-		}
-
-		if (frame_bits < 0) {
-			ast_debug(3, "EVS: undecodable %d-byte payload (0x%02x), concealing\n", f->datalen, in[0]);
-			bad = true;
-		}
-		if (bad || frame_bits <= 0) {
-			/* lost/damaged/NO_DATA: the decoder conceals or continues comfort noise */
-			rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, 0, 0, true);
-		} else {
-			rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, frame, frame_bits, false);
-		}
-		if (rc <= 0) {
-			ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder\n");
-			return -1;
-		}
+		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, frame, frame_bits, false);
 	}
-
+	if (rc <= 0) {
+		ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder\n");
+		return -1;
+	}
 	if (rc != dec->chunk) {
-			ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder, size mismatch! %d\n", rc);
-			return -1;
+		ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder, size mismatch! %d\n", rc);
+		return -1;
 	}
 	pvt->samples += rc;
 	pvt->datalen += rc * sizeof(int16_t);
 
 	return 0;
+}
+
+/*
+ * TS 26.445 A.2.2.2 header-full payload: [CMR] ToC (ToC ...) frame data.
+ * Fills fr[] with the frames in transmission order (oldest first) and returns
+ * their number, 0 if the payload cannot be parsed. A frame whose data is cut
+ * off, and every frame after it, is marked bad.
+ */
+static int evs_parse_header_full(unsigned char *in, int len, struct evs_rx_frame *fr, int max)
+{
+	int idx = (len > 0 && (in[0] & 0x80)) ? 1 : 0; /* skip CMR */
+	int n = 0, i, more = 1;
+	bool cut = false;
+
+	while (more) {
+		unsigned char toc;
+		int io, ft;
+
+		if (idx >= len || n >= max) {
+			return 0; /* ToC list runs past the payload, or more frames than we take */
+		}
+		toc = in[idx++];
+		if (toc & 0x80) {
+			return 0; /* a CMR where a ToC must be */
+		}
+		io = toc & 0x20;
+		ft = toc & 0x0f;
+		fr[n].bits = io ? evs_io_bits(ft) : evs_primary_bits(ft);
+		/* AMR-WB IO Q bit clear: damaged frame */
+		fr[n].bad = (io && !(toc & 0x10)) || fr[n].bits < 0;
+		fr[n].data = NULL;
+		more = toc & 0x40;
+		n++;
+	}
+
+	for (i = 0; i < n; i++) {
+		/* every frame is octet aligned; the IO SID (35 bit) is followed by
+		 * STI + 4 CMI bits, 5 octets in all */
+		int octets = fr[i].bits <= 0 ? 0 : (fr[i].bits == 35 ? 5 : (fr[i].bits + 7) / 8);
+
+		if (cut || idx + octets > len) {
+			cut = true;
+			fr[i].bits = -1;
+			fr[i].bad = true;
+			continue;
+		}
+		fr[i].data = in + idx;
+		idx += octets;
+	}
+
+	return n;
+}
+
+static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
+{
+	struct evs_dec_pvt *dec = pvt->pvt;
+	unsigned char *in = f->data.ptr;
+	struct evs_attr *attr = pvt->explicit_src ? ast_format_get_attribute_data(pvt->explicit_src) : NULL;
+	int do_hf_full = attr && attr->ftmp_hf_only.set == 1 && attr->ftmp_hf_only.val == 1;
+	const int has_ts = ast_test_flag(f, AST_FRFLAG_HAS_TIMING_INFO);
+	int bits = f->datalen * 8;
+	int frames = 1; /* 20 ms frames this payload spans */
+	int res;
+
+	if (f->datalen == 0) {
+		/* a lost frame reported by a jitter buffer: conceal */
+		res = evs_dec_feed(pvt, NULL, 0, true);
+		if (!res && dec->have_last_ts) {
+			dec->last_ts += EVS_FRAME_MS;
+		}
+		return res;
+	}
+
+	if (!do_hf_full && evs_compact_io_bits(bits) > 0) {
+		/* A.2.2.1.2 compact AMR-WB IO: 3 bit CMR | d(1)..d(K-1) | d(0) | pad */
+		unsigned char io_frame[64];
+		int frame_bits = evs_compact_io_bits(bits);
+
+		evs_unpack_compact_io(in, frame_bits, io_frame);
+		res = evs_dec_feed(pvt, io_frame, frame_bits, false);
+	} else if (!do_hf_full && evs_is_compact_primary(bits, in[0])) {
+		/* A.2.2.1.1 compact EVS Primary: the frame itself */
+		res = evs_dec_feed(pvt, in, bits, false);
+	} else {
+		struct evs_rx_frame fr[EVS_MAX_FRAMES_PER_PACKET];
+		int n = evs_parse_header_full(in, f->datalen, fr, EVS_MAX_FRAMES_PER_PACKET);
+
+		if (n == 0) {
+			ast_debug(3, "EVS: undecodable %d-byte payload (0x%02x), concealing\n", f->datalen, in[0]);
+			res = evs_dec_feed(pvt, NULL, 0, true);
+		} else {
+			/*
+			 * Several frames in one payload are application layer redundancy
+			 * (TS 26.114 9.2, what our max-red allows the peer to send): copies
+			 * of earlier frames, oldest first, then the new frame, with NO_DATA
+			 * fillers for frames this payload leaves out. The RTP timestamp is
+			 * that of the FIRST frame. Decode what is newer than the last frame
+			 * the decoder got, so a copy fills in for a lost packet and is
+			 * skipped otherwise. Without usable timing, or when the whole
+			 * payload looks old (timestamp reset), take just the new frame.
+			 */
+			int first = n - 1, i;
+
+			frames = n;
+			if (n > 1 && has_ts && dec->have_last_ts && f->ts + (long) EVS_FRAME_MS * (n - 1) > dec->last_ts) {
+				first = 0;
+				while (first < n - 1 && (f->ts + (long) EVS_FRAME_MS * first <= dec->last_ts
+						/* a leading filler has nothing to recover a lost frame from */
+						|| fr[first].bits == 0)) {
+					first++;
+				}
+				if (first < n - 1) {
+					ast_debug(3, "EVS: recovering %d frame(s) from redundancy in a %d-frame payload\n",
+						n - 1 - first, n);
+				}
+			}
+			res = 0;
+			for (i = first; i < n && !res; i++) {
+				res = evs_dec_feed(pvt, fr[i].data, fr[i].bits, fr[i].bad);
+			}
+		}
+	}
+
+	if (!res && has_ts) {
+		const long newest = f->ts + (long) EVS_FRAME_MS * (frames - 1);
+
+		/* forward only, so a late duplicate does not make later payloads replay
+		 * frames; a jump back of more than a second is a new timestamp base */
+		if (!dec->have_last_ts || newest > dec->last_ts || dec->last_ts - newest > 1000) {
+			dec->last_ts = newest;
+			dec->have_last_ts = 1;
+		}
+	}
+
+	return res;
 }
 
 static struct ast_translator lintoevs = {
