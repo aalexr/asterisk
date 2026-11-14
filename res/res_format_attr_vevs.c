@@ -975,8 +975,8 @@ static void evs_bw_range(const struct evs_attr *a, int *lo, int *hi)
  *    iPhone answers "br=5.9-24.4" to that offer). Narrowing it to one rate made
  *    our UPDATE after an iPhone's 183 carry "br=13.2", which is not what was
  *    just agreed, and the call was terminated with 487 (MTS RU). codec_vevs
- *    sends 13.2 kbps (the GSMA IR.92 default) or the closest rate inside the
- *    range. No overlap means EVS is unusable with this peer (NULL).
+ *    sends the highest rate of the range up to 24.4 kbps. No overlap means
+ *    EVS is unusable with this peer (NULL).
  *  - bw: intersection of both ranges. Without overlap (e.g. an offer with
  *    bw=swb only, which a 16 kHz slin path cannot fill) the narrowest band the
  *    peer asks for is kept rather than dropping EVS: the decoder handles any

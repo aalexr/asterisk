@@ -881,21 +881,27 @@ static int wrap_vocal_evs_close_decoder(evs_dec_ctx_t *ctx) {
 /* enum ftmp_br / ftmp_bw of res_format_attr_vevs.c, in bit/s and EVS_BW_* */
 static const uint32 evs_br_bps[] = {5900, 7200, 8000, 9600, 13200, 16400, 24400, 32000, 48000, 64000, 96000, 128000};
 #define EVS_BR_IDX_13_2 4
+#define EVS_BR_IDX_24_4 6
 /* nb, wb, swb, fb, nb-wb, nb-swb, nb-fb -> widest bandwidth */
 static const uint16 evs_bw_max[] = {0, 1, 2, 3, 1, 2, 3};
 
 /*
- * Encoder configuration from the negotiated (joint) fmtp. res_format_attr_vevs
- * narrows br to the single rate we send; should a range still arrive, use
- * 13.2 kbps (the IR.92 default) or the closest rate inside it. Bandwidth is the
- * widest one allowed (the 16 kHz slin input limits it to WB anyway); DTX is on
- * unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
+ * Encoder configuration from the negotiated (joint) fmtp.
+ *  - Rate: the highest negotiated rate up to 24.4 kbps, what phones send for a
+ *    br=5.9-24.4 session (an iPhone on MTS RU: 61-byte frames) and the most a
+ *    wideband encoder gains from; our b=AS:49 is sized for it. If the peer
+ *    stated no br at all, 13.2 kbps (the GSMA IR.92 default): then nothing
+ *    says the bearer was sized for more.
+ *  - Bandwidth: the widest one allowed (the 16 kHz slin input limits it to WB
+ *    anyway).
+ *  - DTX: on unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
  */
 static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx) {
   int lo = EVS_BR_IDX_13_2, hi = EVS_BR_IDX_13_2, idx = EVS_BR_IDX_13_2;
   int bw = EVS_BW_WB;
 
   if (attr && attr->ftmp_range_br.a.set) {
+    idx = EVS_BR_IDX_24_4;
     lo = hi = attr->ftmp_range_br.a.val;
     if (attr->ftmp_range_br.b.set) {
       hi = attr->ftmp_range_br.b.val;
