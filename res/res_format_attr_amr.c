@@ -21,7 +21,15 @@ static struct amr_attr default_amr_attr = {
 	.octet_align            =  0, /* bandwidth efficient */
 	.mode_set               =  0, /* all modes           */
 	.mode_change_period     =  0, /* not specified       */
-	.mode_change_capability =  0, /* not supported       */
+	/* 3GPP TS 26.114 section 6.2.2.2: an MTSI client offers
+	 * mode-change-capability=2, i.e. it is able to restrict its mode changes to
+	 * every second frame. Without it (RFC 4867 default: 1) a network that has to
+	 * interwork with circuit-switched AMR (mode-change-period=2,
+	 * mode-change-neighbor=1) cannot pick multi-rate AMR/AMR-WB and falls back
+	 * to single-mode AMR 12.2 (seen on Beeline RU, where phones offering the
+	 * parameter get AMR-WB mode-set=0,1,2). codec_amr honours the period and
+	 * neighbour restrictions the answer then carries. */
+	.mode_change_capability =  2,
 	.mode_change_neighbor   =  0, /* change to any       */
 	.crc                    =  0, /* off                 */
 	.robust_sorting         =  0, /* off                 */
