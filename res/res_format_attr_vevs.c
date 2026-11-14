@@ -817,13 +817,19 @@ if (tta.which.set && ttb.which.set) { \
 
 static evs_attr default_attrib = {
 	// SET_E_AT(ftmp_hf_only, 1)
-	/* what codec_vevs can encode from 16 kHz slin (EVS WB tops out usefully at 24.4) */
+	/* Our own offer is what an iPhone sends: "br=5.9-24.4; bw=nb-swb; max-red=220"
+	 * (captured on MTS RU and Beeline RU, where an offer of
+	 * "dtx=1;br=5.9-24.4;bw=nb-wb;max-red=0" towards an iPhone got the call
+	 * terminated with 487).
+	 *  - bw up to swb: the decoder takes any bandwidth; the encoder is fed 16 kHz
+	 *    slin and libvocal caps its bandwidth at fs/2, so we still SEND wideband,
+	 *    which lies inside nb-swb.
+	 *  - no dtx=: dtx=1 is the TS 26.445 A.3.1 default. The encoder still uses DTX
+	 *    unless the peer says dtx=0 (evs_getjoint, codec_vevs).
+	 *  - max-red=220 only declares what we accept; we never send redundancy. */
 	SET_E_ATR2(ftmp_range_br, DEF_ftmp_br5_9, DEF_ftmp_br24_4)
-	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwwb)
-	/* No dtx= in our own offer: dtx=1 is the TS 26.445 A.3.1 default and phones
-	 * (iPhone: "br=5.9-24.4; bw=nb-swb; max-red=220") leave it out. The encoder
-	 * still uses DTX unless the peer says dtx=0 (evs_getjoint, codec_vevs). */
-	SET_E_AT(ftmp_max_red, 0)
+	SET_E_ATR2(ftmp_range_bw, DEF_ftmp_bwnb, DEF_ftmp_bwswb)
+	SET_E_AT(ftmp_max_red, 220)
 };
 
 static void evs_destroy(struct ast_format *format)
