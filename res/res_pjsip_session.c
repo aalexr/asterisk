@@ -5795,6 +5795,25 @@ static int add_bundle_groups(struct ast_sip_session *session, pj_pool_t *pool, p
 	return 0;
 }
 
+/*!
+ * \brief Whether our SDP will go out with IPv6 addresses (for the b=AS header overhead).
+ *
+ * The c= line built in create_local_sdp is the container's local address; the multihomed
+ * filter (pjsip_message_filter.c) rewrites it at transmit time to the address family of
+ * the transport the message leaves on. For an IMS endpoint that is its own transport,
+ * bound to [::] or 0.0.0.0 to match the P-CSCF, so take the family from its bind address.
+ */
+static int volte_sdp_ipv6(const struct ast_sip_session *session)
+{
+	RAII_VAR(struct ast_sip_transport_state *, state, NULL, ao2_cleanup);
+
+	if (!ast_strlen_zero(session->endpoint->transport))
+		state = ast_sip_get_transport_state(session->endpoint->transport);
+	if (state)
+		return state->host.addr.sa_family == pj_AF_INET6();
+	return session->endpoint->media.rtp.ipv6;
+}
+
 static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session,
 						    const pjmedia_sdp_session *offer,
 						    const unsigned int ignore_active_stream_topology,
@@ -5853,14 +5872,6 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 
 	ast_trace(-1, "%s: Processing streams\n", ast_sip_session_get_name(session));
 
-	/* Add Bandwidth attributes to session. */
-	if (session->endpoint->volte &&
-	    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MO_COMPLETE &&
-	    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
-		if (session->endpoint->bw_value)
-			volte_add_sdp_bandwidth_session(inv->pool_prov, local, session->endpoint->bw_value);
-	}
-
 	for (i = 0; i < ast_stream_topology_get_count(session->pending_media_state->topology); ++i) {
 		struct ast_sip_session_media *session_media;
 		struct ast_stream *stream = ast_stream_topology_get_stream(session->pending_media_state->topology, i);
@@ -5902,8 +5913,11 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 						volte_confirm_sdp_qos(&session->qos_status[streams]);
 				}
 			}
+			/* b=AS for this stream's codecs; bw_value only for codecs it cannot size */
 			if (session->endpoint->bw_value)
-				volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams], session->endpoint->bw_value);
+				volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams],
+					volte_sdp_media_bandwidth(local->media[streams], volte_sdp_ipv6(session),
+								  session->endpoint->bw_value));
 			volte_add_sdp_qos(inv->pool_prov, local->media[streams], &session->qos_status[streams]);
 		}
 		if (streams != local->media_count &&
@@ -5938,6 +5952,21 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 		SCOPE_EXIT("%s: Done with %s\n", ast_sip_session_get_name(session),
 			ast_str_tmp(128, ast_stream_to_str(stream, &STR_TMP)));
 
+	}
+
+	/* Add Bandwidth attributes to session: the sum of its streams' b=AS (RFC 4566 5.8), each
+	 * sized for the codecs it carries, computed now that the streams exist. */
+	if (session->endpoint->volte && session->endpoint->bw_value &&
+	    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MO_COMPLETE &&
+	    session->precondition_state != AST_SIP_SESSION_PRECONDITION_MT_COMPLETE) {
+		pj_uint32_t bw = 0;
+
+		for (i = 0; i < local->media_count; i++) {
+			if (!pj_strcmp2(&local->media[i]->desc.media, "audio") && local->media[i]->desc.port)
+				bw += volte_sdp_media_bandwidth(local->media[i], volte_sdp_ipv6(session),
+								session->endpoint->bw_value);
+		}
+		volte_add_sdp_bandwidth_session(inv->pool_prov, local, bw ? bw : session->endpoint->bw_value);
 	}
 
 	/* Add any bundle groups that are present on the media state */
