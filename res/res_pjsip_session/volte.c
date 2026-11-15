@@ -17,6 +17,8 @@
  */
 
 #include "asterisk.h"
+
+#include <ctype.h>
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
 #include "asterisk/res_pjsip.h"
@@ -716,12 +718,14 @@ static double list_max(const char *list)
 	char *end;
 
 	while (list && *list) {
-		double v = strtod(list, &end);
+		double v;
 
-		if (end == list) {
+		/* only unsigned numbers: '-' separates a range ("5.9-24.4"), it is no sign */
+		if (!isdigit((unsigned char)*list)) {
 			list++;
 			continue;
 		}
+		v = strtod(list, &end);
 		if (v > max)
 			max = v;
 		list = end;
@@ -803,9 +807,9 @@ pj_uint32_t volte_sdp_media_bandwidth(const pjmedia_sdp_media *media, int ipv6, 
 
 	if (pj_strcmp2(&media->desc.media, "audio"))
 		return fallback;
-	if (media->conn)
-		ipv6 = !pj_strcmp2(&media->conn->addr_type, "IP6");
-	/* RTP 12 + UDP 8 + IPv4 20 / IPv6 40: the inner (tunnelled) packet the network bears */
+	/* RTP 12 + UDP 8 + IPv4 20 / IPv6 40: the inner (tunnelled) packet the network bears.
+	 * The caller knows the family; the c= line here is not final yet (see
+	 * volte_sdp_ipv6 in res_pjsip_session.c). */
 	hdr = 12 + 8 + (ipv6 ? 40 : 20);
 	attr = pjmedia_sdp_media_find_attr2(media, "ptime", NULL);
 	if (attr) {

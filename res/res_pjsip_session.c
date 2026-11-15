@@ -5795,6 +5795,25 @@ static int add_bundle_groups(struct ast_sip_session *session, pj_pool_t *pool, p
 	return 0;
 }
 
+/*!
+ * \brief Whether our SDP will go out with IPv6 addresses (for the b=AS header overhead).
+ *
+ * The c= line built in create_local_sdp is the container's local address; the multihomed
+ * filter (pjsip_message_filter.c) rewrites it at transmit time to the address family of
+ * the transport the message leaves on. For an IMS endpoint that is its own transport,
+ * bound to [::] or 0.0.0.0 to match the P-CSCF, so take the family from its bind address.
+ */
+static int volte_sdp_ipv6(const struct ast_sip_session *session)
+{
+	RAII_VAR(struct ast_sip_transport_state *, state, NULL, ao2_cleanup);
+
+	if (!ast_strlen_zero(session->endpoint->transport))
+		state = ast_sip_get_transport_state(session->endpoint->transport);
+	if (state)
+		return state->host.addr.sa_family == pj_AF_INET6();
+	return session->endpoint->media.rtp.ipv6;
+}
+
 static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, struct ast_sip_session *session,
 						    const pjmedia_sdp_session *offer,
 						    const unsigned int ignore_active_stream_topology,
@@ -5897,7 +5916,7 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 			/* b=AS for this stream's codecs; bw_value only for codecs it cannot size */
 			if (session->endpoint->bw_value)
 				volte_add_sdp_bandwidth_media(inv->pool_prov, local->media[streams],
-					volte_sdp_media_bandwidth(local->media[streams], session->endpoint->media.rtp.ipv6,
+					volte_sdp_media_bandwidth(local->media[streams], volte_sdp_ipv6(session),
 								  session->endpoint->bw_value));
 			volte_add_sdp_qos(inv->pool_prov, local->media[streams], &session->qos_status[streams]);
 		}
@@ -5944,7 +5963,7 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 
 		for (i = 0; i < local->media_count; i++) {
 			if (!pj_strcmp2(&local->media[i]->desc.media, "audio") && local->media[i]->desc.port)
-				bw += volte_sdp_media_bandwidth(local->media[i], session->endpoint->media.rtp.ipv6,
+				bw += volte_sdp_media_bandwidth(local->media[i], volte_sdp_ipv6(session),
 								session->endpoint->bw_value);
 		}
 		volte_add_sdp_bandwidth_session(inv->pool_prov, local, bw ? bw : session->endpoint->bw_value);
