@@ -248,7 +248,35 @@ static struct ast_frame *lintoamr_frameout(struct ast_trans_pvt *pvt)
 	return result;
 }
 
-static int amrtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
+/*
+ * A 20 ms frame that never arrived, reported by a jitter buffer as an empty
+ * (interpolation) frame. Feed the decoder NO_DATA: right after a SID (the far
+ * end is silent, TS 26.193 / 26.093 DTX) it keeps generating comfort noise
+ * until the next SID or speech, and in a talk spurt it is treated as a bad
+ * frame and concealed (TS 26.191 / 26.091). Without this, a carrier in DTX
+ * sends one SID per 160 ms, each became 20 ms of noise followed by 140 ms of
+ * nothing towards the other leg, heard as pulsing background noise.
+ */
+static int amrtolin_fill(struct ast_trans_pvt *pvt)
+{
+	struct amr_coder_pvt *apvt = pvt->pvt;
+	const unsigned int sample_rate = pvt->t->dst_codec.sample_rate;
+	const unsigned int frame_size = sample_rate / 50;
+	/* MIME storage header (RFC 4867 5.3): P | FT=15 NO_DATA | Q=1 | P P */
+	unsigned char no_data[1] = { (15 << 3) | (1 << 2) };
+
+	if (8000 == sample_rate) {
+		Decoder_Interface_Decode(apvt->state, no_data, pvt->outbuf.i16 + pvt->datalen / 2, 0);
+	} else if (16000 == sample_rate) {
+		D_IF_decode(apvt->state, no_data, pvt->outbuf.i16 + pvt->datalen / 2, 0);
+	}
+	pvt->samples += frame_size;
+	pvt->datalen += frame_size * 2;
+
+	return 0;
+}
+
+static int amrtolin_decode(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct amr_coder_pvt *apvt = pvt->pvt;
 	const unsigned int sample_rate = pvt->t->dst_codec.sample_rate;
@@ -300,15 +328,23 @@ static int amrtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	}
 
 	if (8000 == sample_rate) {
-		Decoder_Interface_Decode(apvt->state, in, pvt->outbuf.i16 + pvt->datalen, bad_frame);
+		Decoder_Interface_Decode(apvt->state, in, pvt->outbuf.i16 + pvt->datalen / 2, bad_frame);
 	} else if (16000 == sample_rate) {
-		D_IF_decode(apvt->state, in, pvt->outbuf.i16 + pvt->datalen, bad_frame);
+		D_IF_decode(apvt->state, in, pvt->outbuf.i16 + pvt->datalen / 2, bad_frame);
 	}
 
 	pvt->samples += frame_size;
 	pvt->datalen += frame_size * 2;
 
 	return 0;
+}
+
+static int amrtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
+{
+	if (f->datalen == 0) {
+		return amrtolin_fill(pvt);
+	}
+	return amrtolin_decode(pvt, f);
 }
 
 static void lintoamr_destroy(struct ast_trans_pvt *pvt)
@@ -366,6 +402,7 @@ static struct ast_translator amrtolin = {
 	.framein = amrtolin_framein,
 	.destroy = amrtolin_destroy,
 	.sample = amr_sample,
+	.native_plc = 1, /* empty frames from a jitter buffer: amrtolin_fill */
 	.desc_size = sizeof(struct amr_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES / 2,
 	/* actually: 50 * channels[6] * redundancy[5] * (mode7[31] + CRC[1] + FT[1] + CMR[1]) */
@@ -412,6 +449,7 @@ static struct ast_translator amrtolin16 = {
 	.framein = amrtolin_framein,
 	.destroy = amrtolin_destroy,
 	.sample = amrwb_sample,
+	.native_plc = 1, /* empty frames from a jitter buffer: amrtolin_fill */
 	.desc_size = sizeof(struct amr_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	/* actually: 50 * channels[6] * redundancy[5] * (mode8[60] + CRC[1] + FT[1] + CMR[1]) */
