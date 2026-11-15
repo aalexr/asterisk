@@ -56,6 +56,7 @@ typedef int (*xvocal_evs_init_decoder)(uint16 sampling_frequency);
 typedef int (*xvocal_evs_process_decoder)(sint15 *dec_samples, uint16 max_sample_count, uint8 *dec_data,
                                           uint16 dec_data_bit_count, vbool bad_frame);
 typedef int (*xvocal_evs_close_decoder)(void);
+typedef int (*xvocal_evs_set_coder)(uint16 bandwidth, uint32 bitrate);
 
 #define STR(x) "\"" #x "\""
 #define IMP(xx)                                                            \
@@ -79,6 +80,7 @@ DD(vocal_evs_close_coder)
 DD(vocal_evs_init_decoder)
 DD(vocal_evs_process_decoder)
 DD(vocal_evs_close_decoder)
+DD(vocal_evs_set_coder) /* optional: without it the encoder ignores CMR */
 
 static void *lib_handle = 0;
 
@@ -106,6 +108,10 @@ static int w_alloc_vocal(void) {
   IMP(vocal_evs_init_decoder)
   IMP(vocal_evs_process_decoder)
   IMP(vocal_evs_close_decoder)
+  vocal_evs_set_coder = (xvocal_evs_set_coder)dlsym(lib_handle, "vocal_evs_set_coder");
+  if (!vocal_evs_set_coder) {
+    ast_log(LOG_NOTICE, "libvocal.so has no vocal_evs_set_coder: EVS rate requests (CMR) are ignored\n");
+  }
   ast_log(LOG_DEBUG, "funcptr init!\n");
   return 0;
 
@@ -670,6 +676,12 @@ struct evs_enc_pvt {
 	evs_enc_ctx_t enc;		/* Encoder states */
 	int chunk;			/* Size of chunk to encode (in samples) */
 	bool last_was_silent;
+	/* CMR handling: the negotiated limits and what was last applied */
+	int br_lo, br_hi;		/* evs_br_bps[] index range the encoder may use */
+	int bw_max;			/* widest negotiated EVS_BW_* */
+	int cmr_seen;			/* last evs_thread_cmr acted on */
+	uint32 bitrate;			/* current settings, for the log */
+	uint16 bandwidth;
 	int16_t buf[EVS_BUF_SAMPLES];	/* Buffer to store received uncompressed audio */
 };
 
@@ -704,6 +716,18 @@ static int wrap_vocal_evs_process_coder(evs_enc_ctx_t *ctx, uint8 *enc_data, uin
   ast_mutex_lock(&vocal_lock);
   vocal_set_data(ctx->vdata);
   r = vocal_evs_process_coder(enc_data, enc_data_size, enc_samples, sample_count);
+  ast_mutex_unlock(&vocal_lock);
+  return r;
+}
+/* change rate/bandwidth from the next frame on; -1 if the library can't */
+static int wrap_vocal_evs_set_coder(evs_enc_ctx_t *ctx, uint16 bandwidth, uint32 bitrate) {
+  int r;
+  if (!vocal_evs_set_coder || !ctx->vdata) {
+    return -1;
+  }
+  ast_mutex_lock(&vocal_lock);
+  vocal_set_data(ctx->vdata);
+  r = vocal_evs_set_coder(bandwidth, bitrate);
   ast_mutex_unlock(&vocal_lock);
   return r;
 }
@@ -855,6 +879,11 @@ static int wrap_vocal_evs_close_coder(evs_enc_ctx_t *ctx) {
   return r;
 }
 
+/* the codec server protocol has no rate switch: CMR is ignored */
+static int wrap_vocal_evs_set_coder(evs_enc_ctx_t *ctx, uint16 bandwidth, uint32 bitrate) {
+  return -1;
+}
+
 static int wrap_vocal_evs_init_decoder(evs_dec_ctx_t *ctx, uint16 sampling_frequency) {
   if (codec_init_conn(&ctx->sock) != 0) return -1;
 
@@ -910,7 +939,8 @@ static const uint16 evs_bw_max[] = {0, 1, 2, 3, 1, 2, 3};
  *    it, and to WB at the rates below 9.6 kbps, which have no SWB).
  *  - DTX: on unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
  */
-static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx) {
+static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx,
+                           int *br_lo, int *br_hi) {
   int lo = EVS_BR_IDX_13_2, hi = EVS_BR_IDX_13_2, idx = EVS_BR_IDX_13_2;
   int bw = EVS_BW_WB;
 
@@ -934,6 +964,76 @@ static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 
   *bitrate = evs_br_bps[idx];
   *bandwidth = bw;
   *dtx = !(attr && attr->ftmp_dtx.set && attr->ftmp_dtx.val == 0);
+  /* a CMR may move the rate inside the negotiated range, but never above the
+   * rate chosen here: b=AS was sized for it */
+  *br_lo = lo;
+  *br_hi = idx;
+}
+
+static const char *const evs_bw_name[] = {"NB", "WB", "SWB", "FB"};
+
+/*
+ * Hand-over of a received CMR from the decoder to the encoder of the same
+ * call. The two translators never see each other (no channel pointer), and
+ * not even a common format object: the decoder works on the format parsed
+ * from the peer's SDP, the encoder on the negotiated one, and Asterisk parses
+ * the SDP more than once. What they do share is the thread: Asterisk reads
+ * from and writes to a channel on that channel's own thread (its PBX thread,
+ * and its bridge_channel thread once bridged: frames for it are queued and
+ * written there), so the carrier channel's decoder (read path) and encoder
+ * (write path) run on one thread. A new decoder resets the slot, so a thread
+ * never passes a request on from an earlier call. 0 = no request yet, else
+ * 0x100 | CMR byte.
+ */
+static __thread int evs_thread_cmr;
+
+/*
+ * Follow a received CMR (TS 26.445 A.2.2.1.1, Table A.4): T = 000 NB,
+ * 010 WB, 011 SWB, 100 FB with D = the EVS Primary bitrate index (the same
+ * index as evs_br_bps[]). The encoder takes the requested rate and bandwidth
+ * clamped to the session: the negotiated br range (at most our initial
+ * rate, which b=AS was sized for) and bw, and the input sampling rate
+ * (libvocal caps the bandwidth by it and by what the bitrate has). A request
+ * stays in force until the next one (NO_REQ = T 111 changes nothing).
+ * Not followed: AMR-WB IO (T 001; we only send EVS Primary) and the
+ * channel-aware modes (T 101/110; channel-aware mode is not supported).
+ */
+static void evs_enc_follow_cmr(struct ast_trans_pvt *pvt, int cmr) {
+  struct evs_enc_pvt *enc = pvt->pvt;
+  int t = (cmr >> 4) & 0x7, d = cmr & 0xf, idx = d;
+  int bw;
+  const unsigned char *valid;
+
+  switch (t) {
+  case 0: bw = EVS_BW_NB; valid = CMR_T_000_valid; break;
+  case 2: bw = EVS_BW_WB; valid = CMR_T_010_valid; break;
+  case 3: bw = EVS_BW_SWB; valid = CMR_T_011_valid; break;
+  case 4: bw = EVS_BW_FB; valid = CMR_T_100_valid; break;
+  case 7:
+    return; /* NO_REQ (or reserved) */
+  default:
+    ast_debug(3, "EVS: CMR 0x%02x (T=%d) not followed: AMR-WB IO / channel-aware mode\n", cmr, t);
+    return;
+  }
+  if (d >= (int)ARR_SZ(evs_br_bps) || !valid[d]) {
+    ast_debug(3, "EVS: CMR 0x%02x has no valid bitrate, ignored\n", cmr);
+    return;
+  }
+  if (idx < enc->br_lo) idx = enc->br_lo;
+  if (idx > enc->br_hi) idx = enc->br_hi;
+  if (bw > enc->bw_max) bw = enc->bw_max;
+  if (evs_br_bps[idx] == enc->bitrate && bw == enc->bandwidth) {
+    return;
+  }
+  if (wrap_vocal_evs_set_coder(&enc->enc, bw, evs_br_bps[idx]) < 0) {
+    ast_debug(3, "EVS: encoder can't switch to %u bit/s %s (CMR 0x%02x)\n", (unsigned)evs_br_bps[idx],
+              evs_bw_name[bw], cmr);
+    return;
+  }
+  ast_log(LOG_NOTICE, "EVS: encoder follows CMR 0x%02x: %u -> %u bit/s, max %s -> %s\n", cmr, (unsigned)enc->bitrate,
+           (unsigned)evs_br_bps[idx], evs_bw_name[enc->bandwidth], evs_bw_name[bw]);
+  enc->bitrate = evs_br_bps[idx];
+  enc->bandwidth = bw;
 }
 
 static int evs_enc_new(struct ast_trans_pvt *pvt) {
@@ -946,8 +1046,15 @@ static int evs_enc_new(struct ast_trans_pvt *pvt) {
   int rc;
 
   memset(enc, 0, sizeof(*enc));
-  evs_enc_params(attr, &bitrate, &bandwidth, &dtx);
-  rc = wrap_vocal_evs_init_coder(&enc->enc, bandwidth, sample_rate == 32000 ? EVS_SF_32K : EVS_SF_16K, bitrate, dtx);
+  evs_enc_params(attr, &bitrate, &bandwidth, &dtx, &enc->br_lo, &enc->br_hi);
+  enc->bw_max = bandwidth;
+  enc->bitrate = bitrate;
+  enc->bandwidth = bandwidth;
+  /* a CMR that arrived before this encoder existed still counts */
+  enc->cmr_seen = 0;
+  rc = wrap_vocal_evs_init_coder(&enc->enc, bandwidth,
+                                 sample_rate == 32000 ? EVS_SF_32K : sample_rate == 8000 ? EVS_SF_8K : EVS_SF_16K,
+                                 bitrate, dtx);
   if (rc <= 0) {
     ast_log(LOG_ERROR, "Error creating the Vocal EVS encoder (%u bit/s, bw %u, dtx %d)\n", (unsigned)bitrate,
             bandwidth, dtx);
@@ -972,7 +1079,9 @@ static int evs_dec_new(struct ast_trans_pvt *pvt) {
   int rc;
 
   memset(dec, 0, sizeof(*dec));
-  rc = wrap_vocal_evs_init_decoder(&dec->dec, sample_rate == 32000 ? EVS_SF_32K : EVS_SF_16K);
+  evs_thread_cmr = 0; /* a new stream on this thread: no request from an earlier one */
+  rc = wrap_vocal_evs_init_decoder(&dec->dec,
+                                   sample_rate == 32000 ? EVS_SF_32K : sample_rate == 8000 ? EVS_SF_8K : EVS_SF_16K);
   if (rc <= 0) {
     ast_log(LOG_ERROR, "Error creating the Vocal EVS decoder\n");
     return -1;
@@ -1014,6 +1123,14 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
 	int samples = 0; /* output samples */
   struct evs_attr *attr = ast_format_get_attribute_data(pvt->f.subclass.format);
   int do_hf_full = attr && attr->ftmp_hf_only.set == 1 && attr->ftmp_hf_only.val == 1;
+  /* the far end's latest rate request, as our decoder saw it */
+  {
+    int cmr = evs_thread_cmr;
+    if (cmr && cmr != enc->cmr_seen) {
+      enc->cmr_seen = cmr;
+      evs_enc_follow_cmr(pvt, cmr & 0xff);
+    }
+  }
 
 	while (pvt->samples >= enc->chunk) {
 		struct ast_frame *current = 0;
@@ -1271,6 +1388,16 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		struct evs_rx_frame fr[EVS_MAX_FRAMES_PER_PACKET];
 		int n = evs_parse_header_full(in, f->datalen, fr, EVS_MAX_FRAMES_PER_PACKET);
 
+		/* header-full with a CMR byte first (H bit set): hand the request to
+		 * the encoder of this call (evs_enc_follow_cmr) */
+		if (n > 0 && (in[0] & 0x80)) {
+			int v = 0x100 | in[0];
+			if (evs_thread_cmr != v) {
+				ast_debug(3, "EVS: received CMR 0x%02x\n", in[0]);
+				evs_thread_cmr = v;
+			}
+		}
+
 		if (n == 0) {
 			ast_debug(3, "EVS: undecodable %d-byte payload (0x%02x), concealing\n", f->datalen, in[0]);
 			res = evs_dec_feed(pvt, NULL, 0, true);
@@ -1322,17 +1449,66 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 }
 
 /*
- * Translators: 16 kHz (WB) and 32 kHz (SWB) audio, each direction. Which pair
- * a call uses is Asterisk's cheapest translation path, so the table costs say
- * that 32 kHz is EVS's own rate and 16 kHz a resampled one:
- *   vevs -> slin32  LY_LL_ORIGSAMP   vevs -> slin16  LY_LL_DOWNSAMP
- *   slin32 -> vevs  LL_LY_ORIGSAMP   slin16 -> vevs  LL_LY_UPSAMP
- * A 16 kHz peer (G.722, AMR-WB, slin16) still gets the direct 16 kHz pair, as
- * one step is cheaper than a step plus a resampler. Any other rate goes
- * through 32 kHz: Opus (48 kHz) keeps the super-wideband band; 8 kHz peers
- * lose nothing but some CPU. The encoder's bandwidth detector codes the band
- * the input actually has, so upsampled wideband audio isn't sent as SWB.
+ * Translators: 8 kHz (NB), 16 kHz (WB) and 32 kHz (SWB) audio, each direction.
+ * Which pair a call uses is Asterisk's cheapest translation path, so the
+ * table costs say that 32 kHz is EVS's own rate and the others resampled:
+ *   vevs -> slin32  LY_LL_ORIGSAMP   vevs -> slin16/8  LY_LL_DOWNSAMP
+ *   slin32 -> vevs  LL_LY_ORIGSAMP   slin16/8 -> vevs  LL_LY_UPSAMP
+ * A 16 kHz peer (G.722, AMR-WB) and an 8 kHz one (G.711, AMR, Asterisk's
+ * own prompts) get their direct pair, as one step is cheaper than a step
+ * plus a resampler; Opus (48 kHz) goes through 32 kHz and keeps the
+ * super-wideband band. The encoder's bandwidth detector codes the band the
+ * input actually has, so resampled narrower audio isn't sent as SWB.
  */
+static struct ast_translator lin8toevs = {
+	.name = "lin8tovevs",
+	.src_codec = {
+		.name = "slin",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 8000,
+	},
+	.dst_codec = {
+		.name = "vevs",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 16000,
+	},
+	.format = "vevs",
+	.table_cost = AST_TRANS_COST_LL_LY_UPSAMP,
+	.newpvt = evs_enc_new,
+	.framein = lintoevs_framein,
+	.frameout = lintoevs_frameout,
+	.destroy = evs_enc_destroy,
+	.sample = slin8_sample,
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
+	.desc_size = sizeof (struct evs_enc_pvt ),
+	.native_plc = 1
+};
+
+static struct ast_translator evstolin8 = {
+	.name = "vevstolin8",
+	.src_codec = {
+		.name = "vevs",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 16000,
+	},
+	.dst_codec = {
+		.name = "slin",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 8000,
+	},
+	.format = "slin",
+	.table_cost = AST_TRANS_COST_LY_LL_DOWNSAMP,
+	.newpvt = evs_dec_new,
+	.framein = evstolin_framein,
+	.destroy = evs_dec_destroy,
+	.sample = vevs_sample,
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
+	.desc_size = sizeof (struct evs_dec_pvt ),
+	.native_plc = 1
+};
+
 static struct ast_translator lintoevs = {
 	.name = "lintovevs",
 	.src_codec = {
@@ -1435,10 +1611,12 @@ static int unload_module(void)
 {
 	int res;
   res = ast_rtp_engine_unload_format(ast_format_vevs);
+	res |= ast_unregister_translator(&lin8toevs);
 	res |= ast_unregister_translator(&lintoevs);
 	res |= ast_unregister_translator(&lin32toevs);
 	res |= ast_unregister_translator(&evstolin);
 	res |= ast_unregister_translator(&evstolin32);
+	res |= ast_unregister_translator(&evstolin8);
   maybe_unload_codeclib();
 
 	return res;
@@ -1452,6 +1630,8 @@ static int load_module(void)
 	}
 	res = ast_register_translator(&evstolin);
 	res |= ast_register_translator(&evstolin32);
+	res |= ast_register_translator(&evstolin8);
+	res |= ast_register_translator(&lin8toevs);
 	res |= ast_register_translator(&lintoevs);
 	res |= ast_register_translator(&lin32toevs);
   res |= ast_rtp_engine_load_format(ast_format_vevs);
