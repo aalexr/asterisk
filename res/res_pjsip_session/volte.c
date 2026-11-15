@@ -735,7 +735,7 @@ static unsigned int format_payload_bytes(const pjmedia_sdp_media *media, const p
 					 unsigned int ptime)
 {
 	pjmedia_sdp_attr *attr;
-	pjmedia_sdp_rtpmap *rtpmap = NULL;
+	pjmedia_sdp_rtpmap rtpmap;
 	pjmedia_sdp_fmtp fmtp = { { NULL, 0 }, { NULL, 0 } };
 	unsigned int frames = ptime / 20 ? ptime / 20 : 1;
 	char name[32] = "", val[64];
@@ -743,7 +743,7 @@ static unsigned int format_payload_bytes(const pjmedia_sdp_media *media, const p
 
 	attr = pjmedia_sdp_media_find_attr2(media, "rtpmap", fmt);
 	if (attr && pjmedia_sdp_attr_get_rtpmap(attr, &rtpmap) == PJ_SUCCESS)
-		ast_copy_pj_str(name, &rtpmap->enc_name, sizeof(name));
+		ast_copy_pj_str(name, &rtpmap.enc_name, sizeof(name));
 	else if (pt == 0)
 		strcpy(name, "PCMU");
 	else if (pt == 8)
