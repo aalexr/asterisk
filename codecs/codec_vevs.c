@@ -653,11 +653,24 @@ typedef struct evs_dec_ctx_t{
   int sock;
 } evs_dec_ctx_t;
 
+/*
+ * The codec runs at 16 kHz (wideband) or 32 kHz (super-wideband) audio: each
+ * direction has a translator per rate (see the translators at the end). The
+ * "vevs" format itself stays at 16000 whatever the audio rate, because that is
+ * the EVS RTP clock (TS 26.445 A.3.1: "EVS/16000" for every bandwidth), so an
+ * EVS frame always counts EVS_FRAME_SAMPLES on the vevs side.
+ *
+ * Buffers hold one RTP payload's worth of decoded audio at the highest rate:
+ * EVS_MAX_FRAMES_PER_PACKET frames of 20 ms at 32 kHz, with slack.
+ */
+#define EVS_FRAME_SAMPLES 320	/* 20 ms at the 16 kHz EVS RTP clock */
+#define EVS_BUF_SAMPLES (2 * BUFFER_SAMPLES)	/* 11520 >= 16 frames x 640 */
+
 struct evs_enc_pvt {
 	evs_enc_ctx_t enc;		/* Encoder states */
 	int chunk;			/* Size of chunk to encode (in samples) */
 	bool last_was_silent;
-	int16_t buf[BUFFER_SAMPLES];	/* Buffer to store received uncompressed audio */
+	int16_t buf[EVS_BUF_SAMPLES];	/* Buffer to store received uncompressed audio */
 };
 
 struct evs_dec_pvt {
@@ -892,8 +905,9 @@ static const uint16 evs_bw_max[] = {0, 1, 2, 3, 1, 2, 3};
  *    wideband encoder gains from; our b=AS:49 is sized for it. If the peer
  *    stated no br at all, 13.2 kbps (the GSMA IR.92 default): then nothing
  *    says the bearer was sized for more.
- *  - Bandwidth: the widest one allowed (the 16 kHz slin input limits it to WB
- *    anyway).
+ *  - Bandwidth: the widest one allowed. The input rate caps it: the 16 kHz
+ *    translator codes at most WB, the 32 kHz one at most SWB (libvocal clamps
+ *    it, and to WB at the rates below 9.6 kbps, which have no SWB).
  *  - DTX: on unless dtx=0 was negotiated (TS 26.445 A.3.2.1 default dtx=1).
  */
 static void evs_enc_params(const struct evs_attr *attr, uint32 *bitrate, uint16 *bandwidth, bool *dtx) {
@@ -933,7 +947,7 @@ static int evs_enc_new(struct ast_trans_pvt *pvt) {
 
   memset(enc, 0, sizeof(*enc));
   evs_enc_params(attr, &bitrate, &bandwidth, &dtx);
-  rc = wrap_vocal_evs_init_coder(&enc->enc, bandwidth, EVS_SF_16K, bitrate, dtx);
+  rc = wrap_vocal_evs_init_coder(&enc->enc, bandwidth, sample_rate == 32000 ? EVS_SF_32K : EVS_SF_16K, bitrate, dtx);
   if (rc <= 0) {
     ast_log(LOG_ERROR, "Error creating the Vocal EVS encoder (%u bit/s, bw %u, dtx %d)\n", (unsigned)bitrate,
             bandwidth, dtx);
@@ -953,11 +967,12 @@ static void evs_enc_destroy(struct ast_trans_pvt *pvt) {
 
 static int evs_dec_new(struct ast_trans_pvt *pvt) {
   struct evs_dec_pvt *dec = pvt->pvt;
-  const unsigned int sample_rate = pvt->t->src_codec.sample_rate;
+  /* audio rate of the slin side; the vevs side is always the 16 kHz RTP clock */
+  const unsigned int sample_rate = pvt->t->dst_codec.sample_rate;
   int rc;
 
   memset(dec, 0, sizeof(*dec));
-  rc = wrap_vocal_evs_init_decoder(&dec->dec, EVS_SF_16K);
+  rc = wrap_vocal_evs_init_decoder(&dec->dec, sample_rate == 32000 ? EVS_SF_32K : EVS_SF_16K);
   if (rc <= 0) {
     ast_log(LOG_ERROR, "Error creating the Vocal EVS decoder\n");
     return -1;
@@ -982,7 +997,7 @@ static int lintoevs_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	/* XXX We should look at how old the rest of our stream is, and if it
 	   is too old, then we should overwrite it entirely, otherwise we can
 	   get artifacts of earlier talk that do not belong */
-	if (pvt->samples + f->samples > BUFFER_SAMPLES) {
+	if (pvt->samples + f->samples > EVS_BUF_SAMPLES) {
 		ast_log(LOG_ERROR, "Out of buffer space\n");
 		return -1;
 	}
@@ -1014,7 +1029,7 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
       *toc = 0x00;
     }
 
-		rc = wrap_vocal_evs_process_coder(&enc->enc, out, BUFFER_SAMPLES * 2, enc->buf, enc->chunk);
+		rc = wrap_vocal_evs_process_coder(&enc->enc, out, EVS_BUF_SAMPLES * 2, enc->buf, enc->chunk);
 		if (rc < 0) {
 			ast_log(LOG_ERROR, "Error encoding with Vocal EVS encoder\n");
 			pvt->samples = 0;
@@ -1045,7 +1060,9 @@ static struct ast_frame *lintoevs_frameout(struct ast_trans_pvt *pvt)
 				pvt->f.flags &= ~AST_FRFLAG_WANTS_MARKER;
 			}
 
-			current = ast_trans_frameout(pvt, datalen_in_bytes, enc->chunk);
+			/* enc->chunk input samples (320 or 640) are one frame, which is
+			 * EVS_FRAME_SAMPLES on the 16 kHz vevs clock */
+			current = ast_trans_frameout(pvt, datalen_in_bytes, EVS_FRAME_SAMPLES);
 			// ast_log(LOG_ERROR, "enc %d -> %d %ld %d\n", rc, pvt->datalen, pvt->f.ts, pvt->f.seqno);
 		} else {
 			struct ast_frame frm = {
@@ -1146,14 +1163,14 @@ static int evs_dec_feed(struct ast_trans_pvt *pvt, unsigned char *frame, int fra
 	int16_t *dst = pvt->outbuf.i16;
 	int rc;
 
-	if (BUFFER_SAMPLES - pvt->samples < dec->chunk) {
+	if (EVS_BUF_SAMPLES - pvt->samples < dec->chunk) {
 		ast_log(LOG_ERROR, "Out of buffer space\n");
 		return -1;
 	}
 	if (bad || frame_bits <= 0) {
-		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, 0, 0, true);
+		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, EVS_BUF_SAMPLES - pvt->samples, 0, 0, true);
 	} else {
-		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, BUFFER_SAMPLES - pvt->samples, frame, frame_bits, false);
+		rc = wrap_vocal_evs_process_decoder(&dec->dec, dst + pvt->samples, EVS_BUF_SAMPLES - pvt->samples, frame, frame_bits, false);
 	}
 	if (rc <= 0) {
 		ast_log(LOG_ERROR, "Error decoding with Vocal EVS decoder\n");
@@ -1304,6 +1321,18 @@ static int evstolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	return res;
 }
 
+/*
+ * Translators: 16 kHz (WB) and 32 kHz (SWB) audio, each direction. Which pair
+ * a call uses is Asterisk's cheapest translation path, so the table costs say
+ * that 32 kHz is EVS's own rate and 16 kHz a resampled one:
+ *   vevs -> slin32  LY_LL_ORIGSAMP   vevs -> slin16  LY_LL_DOWNSAMP
+ *   slin32 -> vevs  LL_LY_ORIGSAMP   slin16 -> vevs  LL_LY_UPSAMP
+ * A 16 kHz peer (G.722, AMR-WB, slin16) still gets the direct 16 kHz pair, as
+ * one step is cheaper than a step plus a resampler. Any other rate goes
+ * through 32 kHz: Opus (48 kHz) keeps the super-wideband band; 8 kHz peers
+ * lose nothing but some CPU. The encoder's bandwidth detector codes the band
+ * the input actually has, so upsampled wideband audio isn't sent as SWB.
+ */
 static struct ast_translator lintoevs = {
 	.name = "lintovevs",
 	.src_codec = {
@@ -1317,13 +1346,39 @@ static struct ast_translator lintoevs = {
 		.sample_rate = 16000,
 	},
 	.format = "vevs",
+	.table_cost = AST_TRANS_COST_LL_LY_UPSAMP,
 	.newpvt = evs_enc_new,
 	.framein = lintoevs_framein,
 	.frameout = lintoevs_frameout,
 	.destroy = evs_enc_destroy,
 	.sample = slin16_sample,
-	.buffer_samples = BUFFER_SAMPLES,
-	.buf_size = BUFFER_SAMPLES * 2,
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
+	.desc_size = sizeof (struct evs_enc_pvt ),
+	.native_plc = 1
+};
+
+static struct ast_translator lin32toevs = {
+	.name = "lin32tovevs",
+	.src_codec = {
+		.name = "slin",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 32000,
+	},
+	.dst_codec = {
+		.name = "vevs",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 16000,
+	},
+	.format = "vevs",
+	.table_cost = AST_TRANS_COST_LL_LY_ORIGSAMP,
+	.newpvt = evs_enc_new,
+	.framein = lintoevs_framein,
+	.frameout = lintoevs_frameout,
+	.destroy = evs_enc_destroy,
+	/* no slin32 sample frame in Asterisk; the table cost decides the path */
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
 	.desc_size = sizeof (struct evs_enc_pvt ),
 	.native_plc = 1
 };
@@ -1341,12 +1396,37 @@ static struct ast_translator evstolin = {
 		.sample_rate = 16000,
 	},
 	.format = "slin16",
+	.table_cost = AST_TRANS_COST_LY_LL_DOWNSAMP,
 	.newpvt = evs_dec_new,
 	.framein = evstolin_framein,
 	.destroy = evs_dec_destroy,
 	.sample = vevs_sample,
-	.buffer_samples = BUFFER_SAMPLES,
-	.buf_size = BUFFER_SAMPLES * 2,
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
+	.desc_size = sizeof (struct evs_dec_pvt ),
+	.native_plc = 1
+};
+
+static struct ast_translator evstolin32 = {
+	.name = "vevstolin32",
+	.src_codec = {
+		.name = "vevs",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 16000,
+	},
+	.dst_codec = {
+		.name = "slin",
+		.type = AST_MEDIA_TYPE_AUDIO,
+		.sample_rate = 32000,
+	},
+	.format = "slin32",
+	.table_cost = AST_TRANS_COST_LY_LL_ORIGSAMP,
+	.newpvt = evs_dec_new,
+	.framein = evstolin_framein,
+	.destroy = evs_dec_destroy,
+	.sample = vevs_sample,
+	.buffer_samples = EVS_BUF_SAMPLES,
+	.buf_size = EVS_BUF_SAMPLES * 2,
 	.desc_size = sizeof (struct evs_dec_pvt ),
 	.native_plc = 1
 };
@@ -1356,7 +1436,9 @@ static int unload_module(void)
 	int res;
   res = ast_rtp_engine_unload_format(ast_format_vevs);
 	res |= ast_unregister_translator(&lintoevs);
+	res |= ast_unregister_translator(&lin32toevs);
 	res |= ast_unregister_translator(&evstolin);
+	res |= ast_unregister_translator(&evstolin32);
   maybe_unload_codeclib();
 
 	return res;
@@ -1369,7 +1451,9 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	res = ast_register_translator(&evstolin);
+	res |= ast_register_translator(&evstolin32);
 	res |= ast_register_translator(&lintoevs);
+	res |= ast_register_translator(&lin32toevs);
   res |= ast_rtp_engine_load_format(ast_format_vevs);
 
 	if (res) {
