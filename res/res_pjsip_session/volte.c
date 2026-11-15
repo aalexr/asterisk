@@ -651,6 +651,188 @@ pj_status_t volte_add_sdp_bandwidth_media(pj_pool_t *pool, pjmedia_sdp_media *me
 	return PJ_SUCCESS;
 }
 
+/*
+ * b=AS sized for the codecs of one SDP audio stream (TS 26.114 6.2.5 / annex K: the
+ * bandwidth of the RTP stream including RTP, UDP and IP headers, rounded up to kbit/s).
+ * Phones do this per call: an iPhone answering AMR-WB mode-set=0,1,2 over IPv6 sends
+ * b=AS:38, MTS RU answering AMR 12.2 sends b=AS:37 - exactly what this computes. One
+ * fixed bw_value per endpoint can only fit the largest codec of the offer, so an AMR-WB
+ * call on an EVS line would claim the EVS 24.4 bandwidth.
+ */
+
+/* Speech bits per 20 ms frame per mode (TS 26.201 table 2, TS 26.101 table 1). */
+static const unsigned int amrwb_bits[] = { 132, 177, 253, 285, 317, 365, 397, 461, 477 };
+static const unsigned int amr_bits[] = { 95, 103, 118, 134, 148, 159, 204, 244 };
+
+/* Compact-format EVS payload bytes per frame for a bitrate (TS 26.445 table A.1); 5.9 is
+ * source-controlled VBR whose largest frame is the 8.0 kbit/s one. */
+static unsigned int evs_frame_bytes(double kbps)
+{
+	static const struct { double kbps; unsigned int bytes; } tab[] = {
+		{ 5.9, 20 }, { 7.2, 18 }, { 8.0, 20 }, { 9.6, 24 }, { 13.2, 33 }, { 16.4, 41 },
+		{ 24.4, 61 }, { 32.0, 80 }, { 48.0, 120 }, { 64.0, 160 }, { 96.0, 240 }, { 128.0, 320 },
+	};
+	unsigned int i, bytes = 0;
+
+	for (i = 0; i < ARRAY_LEN(tab); i++) {
+		if (tab[i].kbps <= kbps + 0.05 && tab[i].bytes > bytes)
+			bytes = tab[i].bytes;
+	}
+	return bytes;
+}
+
+/* Value of "name=" in an fmtp parameter string, NUL-terminated copy in buf; NULL if absent. */
+static const char *fmtp_param(const pj_str_t *params, const char *name, char *buf, size_t len)
+{
+	char all[256];
+	size_t nlen = strlen(name);
+	const char *p;
+
+	ast_copy_pj_str(all, params, sizeof(all));
+	for (p = all; (p = strstr(p, name)); p += nlen) {
+		const char *end;
+		size_t vlen;
+
+		/* whole parameter names only ("mode-set" must not match "x-mode-set") */
+		if ((p != all && p[-1] != ';' && p[-1] != ' ') || p[nlen] != '=')
+			continue;
+		p += nlen + 1;
+		end = strchr(p, ';');
+		vlen = end ? (size_t)(end - p) : strlen(p);
+		if (vlen >= len)
+			vlen = len - 1;
+		memcpy(buf, p, vlen);
+		buf[vlen] = '\0';
+		ast_strip(buf);
+		return buf;
+	}
+	return NULL;
+}
+
+/* Largest number in a list such as "0,1,2" or "5.9-24.4" or "13.2"; -1 if none. */
+static double list_max(const char *list)
+{
+	double max = -1;
+	char *end;
+
+	while (list && *list) {
+		double v = strtod(list, &end);
+
+		if (end == list) {
+			list++;
+			continue;
+		}
+		if (v > max)
+			max = v;
+		list = end;
+	}
+	return max;
+}
+
+/* RTP payload bytes of one packet with ptime ms of this format; 0 = not a speech codec we
+ * know (telephone-event, CN, ...). */
+static unsigned int format_payload_bytes(const pjmedia_sdp_media *media, const pj_str_t *fmt,
+					 unsigned int ptime)
+{
+	pjmedia_sdp_attr *attr;
+	pjmedia_sdp_rtpmap *rtpmap = NULL;
+	pjmedia_sdp_fmtp fmtp = { { NULL, 0 }, { NULL, 0 } };
+	unsigned int frames = ptime / 20 ? ptime / 20 : 1;
+	char name[32] = "", val[64];
+	int pt = pj_strtoul(fmt);
+
+	attr = pjmedia_sdp_media_find_attr2(media, "rtpmap", fmt);
+	if (attr && pjmedia_sdp_attr_get_rtpmap(attr, &rtpmap) == PJ_SUCCESS)
+		ast_copy_pj_str(name, &rtpmap->enc_name, sizeof(name));
+	else if (pt == 0)
+		strcpy(name, "PCMU");
+	else if (pt == 8)
+		strcpy(name, "PCMA");
+	else if (pt == 9)
+		strcpy(name, "G722");
+	attr = pjmedia_sdp_media_find_attr2(media, "fmtp", fmt);
+	if (attr)
+		pjmedia_sdp_attr_get_fmtp(attr, &fmtp);
+
+	if (!strcasecmp(name, "AMR-WB") || !strcasecmp(name, "AMR")) {
+		int wb = !strcasecmp(name, "AMR-WB");
+		const unsigned int *bits = wb ? amrwb_bits : amr_bits;
+		int nmodes = wb ? ARRAY_LEN(amrwb_bits) : ARRAY_LEN(amr_bits);
+		int mode = nmodes - 1;
+		const char *v;
+		unsigned int speech;
+
+		/* mode-set limits what the peer may send us; without it every mode is allowed */
+		if ((v = fmtp_param(&fmtp.fmt_param, "mode-set", val, sizeof(val)))) {
+			double m = list_max(v);
+
+			if (m >= 0 && m < nmodes)
+				mode = (int)m;
+		}
+		speech = bits[mode];
+		v = fmtp_param(&fmtp.fmt_param, "octet-align", val, sizeof(val));
+		if (v && atoi(v) == 1) /* RFC 4867 4.4: CMR byte, a ToC byte and byte-padded frame each */
+			return 1 + frames * (1 + (speech + 7) / 8);
+		/* bandwidth-efficient (RFC 4867 4.3): 4-bit CMR, 6-bit ToC per frame, padded once */
+		return (4 + frames * (6 + speech) + 7) / 8;
+	}
+	if (!strcasecmp(name, "EVS")) {
+		double kbps = -1;
+		const char *v;
+		unsigned int bytes;
+
+		/* br-recv bounds what we receive; br both directions. No br: the 24.4 our
+		 * codec_vevs offers (its br=5.9-24.4) - the full EVS range would be 128. */
+		if ((v = fmtp_param(&fmtp.fmt_param, "br-recv", val, sizeof(val))))
+			kbps = list_max(v);
+		if (kbps < 0 && (v = fmtp_param(&fmtp.fmt_param, "br", val, sizeof(val))))
+			kbps = list_max(v);
+		bytes = evs_frame_bytes(kbps > 0 ? kbps : 24.4);
+		/* one frame: compact format; more: header-full with a ToC byte per frame */
+		return frames == 1 ? bytes : frames * (1 + bytes);
+	}
+	if (!strcasecmp(name, "PCMU") || !strcasecmp(name, "PCMA") || !strcasecmp(name, "G722"))
+		return 8 * ptime; /* 64 kbit/s */
+	return 0;
+}
+
+pj_uint32_t volte_sdp_media_bandwidth(const pjmedia_sdp_media *media, int ipv6, pj_uint32_t fallback)
+{
+	unsigned int hdr, ptime = 20, i, max = 0;
+	pjmedia_sdp_attr *attr;
+
+	if (pj_strcmp2(&media->desc.media, "audio"))
+		return fallback;
+	if (media->conn)
+		ipv6 = !pj_strcmp2(&media->conn->addr_type, "IP6");
+	/* RTP 12 + UDP 8 + IPv4 20 / IPv6 40: the inner (tunnelled) packet the network bears */
+	hdr = 12 + 8 + (ipv6 ? 40 : 20);
+	attr = pjmedia_sdp_media_find_attr2(media, "ptime", NULL);
+	if (attr) {
+		unsigned int p = pj_strtoul(&attr->value);
+
+		if (p >= 10 && p <= 400)
+			ptime = p;
+	}
+	/* Largest of the stream's formats: in an offer any of them may be chosen, in an
+	 * answer they are the ones negotiated (one for a single-codec answer). */
+	for (i = 0; i < media->desc.fmt_count; i++) {
+		unsigned int bytes = format_payload_bytes(media, &media->desc.fmt[i], ptime);
+		unsigned int kbps;
+
+		if (!bytes)
+			continue;
+		/* kbit/s = bits per ms, rounded up */
+		kbps = ((bytes + hdr) * 8 + ptime - 1) / ptime;
+		if (kbps > max)
+			max = kbps;
+	}
+	if (!max) /* no codec we can size: the configured bw_value */
+		return fallback;
+	ast_debug(1, "SDP b=AS:%u (%s, ptime %u)\n", max, ipv6 ? "IPv6" : "IPv4", ptime);
+	return max;
+}
+
 //#define DEBUG_NEGOTIATION
 
 /* Use remote status table to update local status table. */

@@ -1537,7 +1537,10 @@
 					</para></description>
 				</configOption>
 				<configOption name="bw_value">
-					<synopsis>VoLTE: Define maximum bandwidth for codecs used. Bandwidth must includes transport headers. (RTP+UDP+IP)</synopsis>
+					<synopsis>VoLTE: Enable SDP b=AS/RS/RR; fallback bandwidth in kbit/s incl. RTP+UDP+IP headers.</synopsis>
+					<description><para>b=AS is computed per stream from the codecs in the SDP (AMR/AMR-WB
+					mode-set, EVS br, ptime, IPv4/IPv6 headers). This value is used only for streams
+					without a codec that can be sized that way. 0 disables the b= lines.</para></description>
 				</configOption>
 				<configOption name="hack_evs">
 					<synopsis>VoLTE: Internal debugging feature.</synopsis>
