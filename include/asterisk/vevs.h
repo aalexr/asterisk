@@ -39,8 +39,11 @@ typedef struct evs_attr evs_attr;
 //  minimum set of defines to make mockup happy
 #define EVS_BW_NB 0u
 #define EVS_BW_WB 1u
+#define EVS_BW_SWB 2u
+#define EVS_BW_FB 3u
 #define EVS_SF_8K 8000u
 #define EVS_SF_16K 16000u
+#define EVS_SF_32K 32000u
 #define EVS_BR_5k90 5900u
 
 #define BUFFER_SAMPLES 5760
